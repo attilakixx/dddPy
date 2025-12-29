@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import tkinter.font as tkfont
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -34,6 +35,7 @@ class DddReaderApp(tk.Tk):
         self.title("dddPy - DDD File Reader")
         self.minsize(720, 640)
 
+        self.colors = {}
         self.icon_image = None
         for icon_name in ("icon.png", "dddPyIcon.png"):
             icon_path = Path(__file__).with_name(icon_name)
@@ -58,9 +60,101 @@ class DddReaderApp(tk.Tk):
         self._activity_day_map = {}
         self._current_activity_day = None
 
+        self._apply_theme()
         self._build_ui()
         self.bind_all("<Control-c>", self._copy_selection)
         self.bind_all("<Control-C>", self._copy_selection)
+
+    def _apply_theme(self) -> None:
+        colors = {
+            "bg": "#EEF1F5",
+            "panel": "#FFFFFF",
+            "border": "#D9DEE7",
+            "accent": "#1F6FEB",
+            "accent_dark": "#164EB6",
+            "text": "#1F2937",
+            "subtext": "#6B7280",
+            "success": "#15803D",
+            "danger": "#B91C1C",
+        }
+        self.colors = colors
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        base_family = self._pick_font_family()
+        default_font = tkfont.nametofont("TkDefaultFont")
+        default_font.configure(family=base_family, size=10)
+        heading_font = tkfont.Font(family=base_family, size=10, weight="bold")
+        title_font = tkfont.Font(family=base_family, size=16, weight="bold")
+
+        self.configure(background=colors["bg"])
+        style.configure("TFrame", background=colors["panel"])
+        style.configure("Header.TFrame", background=colors["panel"])
+        style.configure("TLabel", background=colors["panel"], foreground=colors["text"])
+        style.configure("Subtle.TLabel", background=colors["panel"], foreground=colors["subtext"])
+        style.configure("Title.TLabel", background=colors["panel"], foreground=colors["text"], font=title_font)
+        style.configure("Section.TLabel", background=colors["panel"], foreground=colors["text"], font=heading_font)
+        style.configure("Valid.TLabel", background=colors["panel"], foreground=colors["success"])
+        style.configure("Invalid.TLabel", background=colors["panel"], foreground=colors["danger"])
+        style.configure("Neutral.TLabel", background=colors["panel"], foreground=colors["text"])
+
+        style.configure(
+            "Accent.TButton",
+            background=colors["accent"],
+            foreground="#FFFFFF",
+            padding=(12, 6),
+            borderwidth=0,
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", colors["accent_dark"])],
+            foreground=[("disabled", "#D1D5DB")],
+        )
+        style.configure("TButton", padding=(10, 6))
+        style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=colors["border"], padding=6)
+
+        style.configure("TNotebook", background=colors["bg"], borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            background="#E5E7EB",
+            padding=(12, 6),
+            font=heading_font,
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", colors["panel"])],
+            foreground=[("selected", colors["text"]), ("!selected", colors["subtext"])],
+        )
+
+        style.configure(
+            "Treeview",
+            background=colors["panel"],
+            fieldbackground=colors["panel"],
+            foreground=colors["text"],
+            rowheight=24,
+            bordercolor=colors["border"],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#E9ECF2",
+            foreground=colors["text"],
+            font=heading_font,
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#D6E4FF")],
+            foreground=[("selected", colors["text"])],
+        )
+
+    def _pick_font_family(self) -> str:
+        families = set(tkfont.families())
+        for candidate in ("Segoe UI", "Helvetica Neue", "DejaVu Sans", "Liberation Sans"):
+            if candidate in families:
+                return candidate
+        return tkfont.nametofont("TkDefaultFont").actual("family")
 
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self)
@@ -88,20 +182,32 @@ class DddReaderApp(tk.Tk):
         vu_notebook.add(events_tab, text="Events/Faults")
         vu_notebook.add(activities_tab, text="Activities")
 
-        summary = ttk.Frame(summary_tab, padding=12)
+        summary = ttk.Frame(summary_tab, padding=16)
         summary.grid(row=0, column=0, sticky="nsew")
         summary_tab.columnconfigure(0, weight=1)
         summary_tab.rowconfigure(0, weight=1)
         summary.columnconfigure(0, weight=1)
-        summary.rowconfigure(6, weight=1)
-        summary.rowconfigure(8, weight=1)
+        summary.rowconfigure(5, weight=1)
+        summary.rowconfigure(7, weight=1)
 
-        header_frame = ttk.Frame(summary)
+        header_frame = ttk.Frame(summary, style="Header.TFrame")
         header_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
         header_frame.columnconfigure(0, weight=1)
 
-        self.validity_label = ttk.Label(header_frame, textvariable=self.validity_text)
-        self.validity_label.grid(row=0, column=0, sticky="w")
+        header_left = ttk.Frame(header_frame, style="Header.TFrame")
+        header_left.grid(row=0, column=0, sticky="w")
+        header_left.columnconfigure(0, weight=1)
+
+        ttk.Label(header_left, text="dddPy", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.validity_label = ttk.Label(
+            header_left, textvariable=self.validity_text, style="Neutral.TLabel"
+        )
+        self.validity_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(header_left, textvariable=self.file_type_text, style="Subtle.TLabel").grid(
+            row=2, column=0, sticky="w", pady=(2, 0)
+        )
 
         self.logo_image = None
         logo_path = Path(__file__).with_name("logo.png")
@@ -121,7 +227,8 @@ class DddReaderApp(tk.Tk):
         ttk.Label(
             summary,
             text="Select a tachograph .ddd file to open:",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            style="Section.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         path_entry = ttk.Entry(summary, textvariable=self.file_path, state="readonly")
         path_entry.grid(row=2, column=0, sticky="ew", padx=(0, 8), pady=(8, 0))
@@ -129,24 +236,20 @@ class DddReaderApp(tk.Tk):
         ttk.Button(summary, text="Browse...", command=self._browse).grid(
             row=2, column=1, sticky="ew", pady=(8, 0)
         )
-        ttk.Button(summary, text="Open", command=self._open_file).grid(
+        ttk.Button(summary, text="Open", style="Accent.TButton", command=self._open_file).grid(
             row=2, column=2, sticky="ew", pady=(8, 0)
         )
 
-        ttk.Label(summary, textvariable=self.status_text, foreground="gray").grid(
+        ttk.Label(summary, textvariable=self.status_text, style="Subtle.TLabel").grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
 
-        ttk.Label(summary, textvariable=self.file_type_text).grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(6, 0)
-        )
-
-        ttk.Label(summary, text="Parsed header fields:").grid(
-            row=5, column=0, columnspan=3, sticky="w", pady=(12, 0)
+        ttk.Label(summary, text="Parsed header fields:", style="Section.TLabel").grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(12, 0)
         )
 
         details_frame = ttk.Frame(summary)
-        details_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
+        details_frame.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
         details_frame.columnconfigure(0, weight=1)
         details_frame.rowconfigure(0, weight=1)
 
@@ -166,12 +269,12 @@ class DddReaderApp(tk.Tk):
         self.header_tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        ttk.Label(summary, text="File parts:").grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(12, 0)
+        ttk.Label(summary, text="File parts:", style="Section.TLabel").grid(
+            row=6, column=0, columnspan=3, sticky="w", pady=(12, 0)
         )
 
         parts_frame = ttk.Frame(summary)
-        parts_frame.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
+        parts_frame.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
         parts_frame.columnconfigure(0, weight=1)
         parts_frame.rowconfigure(0, weight=1)
 
