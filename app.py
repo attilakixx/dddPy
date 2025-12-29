@@ -34,6 +34,18 @@ class DddReaderApp(tk.Tk):
         self.title("dddPy - DDD File Reader")
         self.minsize(720, 640)
 
+        self.icon_image = None
+        for icon_name in ("icon.png", "dddPyIcon.png"):
+            icon_path = Path(__file__).with_name(icon_name)
+            if icon_path.exists():
+                try:
+                    icon_image = tk.PhotoImage(file=str(icon_path))
+                except tk.TclError:
+                    continue
+                self.icon_image = icon_image
+                self.iconphoto(True, icon_image)
+                break
+
         self.file_path = tk.StringVar()
         self.status_text = tk.StringVar(value="No file selected.")
         self.validity_text = tk.StringVar(value="Validity: Not checked.")
@@ -46,6 +58,8 @@ class DddReaderApp(tk.Tk):
         self._current_activity_day = None
 
         self._build_ui()
+        self.bind_all("<Control-c>", self._copy_selection)
+        self.bind_all("<Control-C>", self._copy_selection)
 
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self)
@@ -81,10 +95,27 @@ class DddReaderApp(tk.Tk):
         summary.rowconfigure(6, weight=1)
         summary.rowconfigure(8, weight=1)
 
-        self.validity_label = ttk.Label(summary, textvariable=self.validity_text)
-        self.validity_label.grid(
-            row=0, column=0, columnspan=3, sticky="w"
-        )
+        header_frame = ttk.Frame(summary)
+        header_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        header_frame.columnconfigure(0, weight=1)
+
+        self.validity_label = ttk.Label(header_frame, textvariable=self.validity_text)
+        self.validity_label.grid(row=0, column=0, sticky="w")
+
+        self.logo_image = None
+        logo_path = Path(__file__).with_name("logo.png")
+        if logo_path.exists():
+            try:
+                logo_image = tk.PhotoImage(file=str(logo_path))
+                scale = max(1, logo_image.width() // 260, logo_image.height() // 90)
+                if scale > 1:
+                    logo_image = logo_image.subsample(scale, scale)
+                self.logo_image = logo_image
+                ttk.Label(header_frame, image=self.logo_image).grid(
+                    row=0, column=1, sticky="e"
+                )
+            except tk.TclError:
+                self.logo_image = None
 
         ttk.Label(
             summary,
@@ -958,6 +989,44 @@ class DddReaderApp(tk.Tk):
         self.activities_tree.grid(row=0, column=0, sticky="nsew")
         activities_scrollbar.grid(row=0, column=1, sticky="ns")
 
+    def _copy_selection(self, _event=None) -> None:
+        widget = self.focus_get()
+        if widget is None:
+            return
+
+        text = None
+        if isinstance(widget, ttk.Treeview):
+            selection = widget.selection()
+            if not selection:
+                return
+            lines = []
+            for item_id in selection:
+                item = widget.item(item_id)
+                values = item.get("values") or ()
+                label = item.get("text") or ""
+                parts = []
+                if label:
+                    parts.append(str(label))
+                parts.extend(str(value) for value in values if value != "")
+                if parts:
+                    lines.append(" | ".join(parts))
+            if lines:
+                text = "\n".join(lines)
+        elif isinstance(widget, tk.Entry):
+            try:
+                text = widget.selection_get()
+            except tk.TclError:
+                text = widget.get()
+        elif isinstance(widget, tk.Text):
+            try:
+                text = widget.selection_get()
+            except tk.TclError:
+                text = widget.get("1.0", "end-1c")
+
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update_idletasks()
 
     def _browse(self) -> None:
         path = filedialog.askopenfilename(

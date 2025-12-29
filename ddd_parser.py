@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 
 from ddd_binary import ByteReader
@@ -87,6 +88,60 @@ _PART_DEFS = (
 )
 
 _VALID_TREPS = set(_TREP_DATA_TYPES.keys())
+
+_CARD_PART_DEFS = (
+    ("File structure", None, False, None, ()),
+    ("Application identification", 0x0501, True, ("min", 10), ("gen1", "gen2")),
+    ("Card identification", 0x0520, True, ("min", 143), ("gen1", "gen2")),
+    ("Driving licence info", 0x0521, True, ("min", 53), ("gen1", "gen2")),
+    ("Events", 0x0502, True, ("min", 1), ("gen1", "gen2")),
+    ("Faults", 0x0503, True, ("min", 1), ("gen1", "gen2")),
+    ("Driver activity", 0x0504, True, ("range", 5548, 13780), ("gen1", "gen2")),
+    ("Vehicles used", 0x0505, True, ("min", 1), ("gen1", "gen2")),
+    ("Places", 0x0506, True, ("min", 1), ("gen1", "gen2")),
+    ("Current usage", 0x0507, True, ("min", 1), ("gen1", "gen2")),
+    ("Control activity", 0x0508, True, ("min", 1), ("gen1", "gen2")),
+    ("Specific conditions", 0x0522, True, ("min", 1), ("gen1", "gen2")),
+    ("GNSS places (Gen2)", 0x0523, True, ("min", 2002), ("gen2",)),
+    ("Border crossings (Gen2)", 0x0524, True, ("min", 6050), ("gen2",)),
+    ("Card download", 0x050E, True, ("min", 4), ("gen1", "gen2")),
+    ("Card certificate", 0xC100, False, ("min", 194), ("gen1",)),
+    ("CA certificate", 0xC108, False, ("min", 194), ("gen1",)),
+    ("Card certificate (Gen2)", 0xC101, False, ("min", 194), ("gen2",)),
+    ("CA certificate (Gen2)", 0xC109, False, ("min", 194), ("gen2",)),
+    ("ICC identification", 0x0002, False, ("min", 1), ("gen1", "gen2")),
+    ("IC identification", 0x0005, False, ("min", 1), ("gen1", "gen2")),
+)
+
+_CARD_SIGNATURE_LEN = 128
+_CARD_CERT_LEN = 194
+
+_CARD_APPENDIX_SCHEMES = {
+    "gen1": {"data": 0, "sig": 1, "sig_len": 128},
+    "gen2": {"data": 2, "sig": 3, "sig_len": 64},
+}
+
+_EU_RSA_N = bytes(
+    [
+        0xE9, 0x80, 0x76, 0x3A, 0x44, 0x4A, 0x95, 0x25,
+        0x0A, 0x95, 0x87, 0x82, 0xD1, 0xD5, 0x4A, 0xCF,
+        0xC3, 0x23, 0xD2, 0x5F, 0x39, 0x46, 0xB8, 0x16,
+        0xE9, 0x2F, 0xCF, 0x9D, 0x32, 0xB4, 0x2A, 0x26,
+        0x13, 0xD1, 0xA3, 0x63, 0xB4, 0xE4, 0x35, 0x32,
+        0xA0, 0x26, 0x68, 0x63, 0x29, 0xC8, 0x96, 0x63,
+        0xCC, 0xC0, 0x01, 0xF7, 0x27, 0x82, 0x06, 0xB6,
+        0xAB, 0x65, 0xAD, 0x28, 0x71, 0x84, 0x8A, 0x68,
+        0x0F, 0x6A, 0x57, 0xD8, 0xFD, 0xA1, 0xD7, 0x82,
+        0xC9, 0xB5, 0x81, 0x29, 0x03, 0xEA, 0x5B, 0x66,
+        0xE2, 0xA9, 0xBE, 0x1D, 0x85, 0xBD, 0xD0, 0xFD,
+        0xAE, 0x76, 0xA4, 0x60, 0x88, 0xD7, 0x1A, 0x61,
+        0x76, 0xB1, 0xF6, 0xA9, 0x84, 0x19, 0x10, 0x04,
+        0x24, 0xDC, 0x56, 0xD0, 0x84, 0x6A, 0xA3, 0xC8,
+        0x43, 0x90, 0xD3, 0x51, 0x7A, 0x0F, 0x11, 0x92,
+        0xDE, 0xDF, 0xF7, 0x40, 0x92, 0x4C, 0xDB, 0xA7,
+    ]
+)
+_EU_RSA_E = bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01])
 
 _GEN2_OVERVIEW_SEQUENCE = (
     (0x04,),
@@ -351,6 +406,9 @@ def _validate_header(
 
 
 def _validate_parts(data: bytes, header: DddHeader) -> tuple[DddPart, ...]:
+    if header.detected_type == "driver_card":
+        return _validate_driver_card_parts(data)
+
     if header.detected_type != "vehicle_unit":
         note = (
             "Driver card file"
@@ -672,6 +730,220 @@ def _skip_exact(reader: ByteReader, count: int) -> bool:
         return False
     reader.skip(count)
     return True
+
+
+def _validate_driver_card_parts(data: bytes) -> tuple[DddPart, ...]:
+    entries, trailing, truncated = _parse_card_ef_files(data)
+    entries_by_id = {}
+    unknown_ids: set[int] = set()
+
+    known_ids = {part_id for _name, part_id, _sig, _rule, _schemes in _CARD_PART_DEFS if part_id}
+    for entry in entries:
+        entries_by_id.setdefault(entry["file_id"], []).append(entry)
+        if entry["appendix"] in {0, 1} and entry["file_id"] not in known_ids:
+            unknown_ids.add(entry["file_id"])
+
+    structure_note_parts = []
+    if truncated:
+        structure_note_parts.append("Truncated file entry")
+    if trailing:
+        structure_note_parts.append("Trailing bytes after last file entry")
+    if unknown_ids:
+        unknown_list = ", ".join(f"0x{val:04X}" for val in sorted(unknown_ids))
+        structure_note_parts.append(f"Unknown EF file IDs: {unknown_list}")
+    structure_note = "; ".join(structure_note_parts) if structure_note_parts else None
+
+    cert_ca_data = _get_card_file_data(entries_by_id, 0xC108, appendices=(0,))
+    cert_card_data = _get_card_file_data(entries_by_id, 0xC100, appendices=(0,))
+    cert_chain_ok = None
+    cert_chain_note = None
+    if cert_ca_data and cert_card_data:
+        cert_chain_ok, cert_chain_note = _verify_driver_card_certificates(
+            cert_ca_data, cert_card_data
+        )
+
+    parts: list[DddPart] = []
+    for name, file_id, requires_sig, rule, schemes in _CARD_PART_DEFS:
+        if file_id is None:
+            status = "valid" if not truncated and not trailing else "invalid"
+            parts.append(DddPart(name=name, status=status, note=structure_note))
+            continue
+
+        status, note = _validate_card_entries(entries_by_id.get(file_id, []), requires_sig, rule, schemes)
+        notes: list[str] = []
+        if note:
+            notes.append(note)
+        if file_id == 0xC108 and cert_chain_ok is False:
+            status = "invalid"
+            if cert_chain_note:
+                notes.append(cert_chain_note)
+        if file_id == 0xC100 and cert_chain_ok is False:
+            status = "invalid"
+            if cert_chain_note:
+                notes.append(cert_chain_note)
+        if file_id in {0xC101, 0xC109} and status == "valid":
+            notes.append("ECC certificate not verified")
+
+        parts.append(DddPart(name=name, status=status, note="; ".join(notes) if notes else None))
+    return tuple(parts)
+
+
+def _parse_card_ef_files(data: bytes) -> tuple[list[dict], bool, bool]:
+    entries: list[dict] = []
+    offset = 0
+    truncated = False
+    while offset + 5 <= len(data):
+        file_id = int.from_bytes(data[offset:offset + 2], "big")
+        appendix = data[offset + 2]
+        length = int.from_bytes(data[offset + 3:offset + 5], "big")
+        end = offset + 5 + length
+        if end > len(data):
+            truncated = True
+            break
+        entries.append(
+            {
+                "file_id": file_id,
+                "appendix": appendix,
+                "length": length,
+                "offset": offset,
+                "data": data[offset + 5:end],
+            }
+        )
+        offset = end
+    trailing = offset != len(data)
+    return entries, trailing, truncated
+
+
+def _validate_card_length(length: int, rule: tuple) -> bool:
+    if not rule:
+        return True
+    if rule[0] == "min":
+        return length >= rule[1]
+    if rule[0] == "range":
+        return rule[1] <= length <= rule[2]
+    return True
+
+
+def _validate_card_entries(
+    entries: list[dict],
+    requires_sig: bool,
+    rule: tuple | None,
+    schemes: tuple[str, ...],
+) -> tuple[str, str | None]:
+    if not entries:
+        return "missing", None
+
+    scheme_results: list[tuple[str, bool, list[str]]] = []
+    for scheme in schemes:
+        scheme_info = _CARD_APPENDIX_SCHEMES.get(scheme)
+        if scheme_info is None:
+            continue
+        data_appendix = scheme_info["data"]
+        sig_appendix = scheme_info["sig"]
+        sig_len = scheme_info["sig_len"]
+        data_entries = [entry for entry in entries if entry["appendix"] == data_appendix]
+        sig_entries = [entry for entry in entries if entry["appendix"] == sig_appendix]
+        if not data_entries and not sig_entries:
+            continue
+        notes: list[str] = []
+        valid = True
+        if len(data_entries) > 1:
+            notes.append("Duplicate data entries")
+        if len(sig_entries) > 1:
+            notes.append("Duplicate signature entries")
+
+        if not data_entries:
+            valid = False
+            notes.append("Missing data appendix")
+        else:
+            if rule is not None and not _validate_card_length(data_entries[0]["length"], rule):
+                valid = False
+                notes.append("Unexpected length")
+        if requires_sig:
+            if not sig_entries:
+                valid = False
+                notes.append("Missing signature appendix")
+            elif sig_entries[0]["length"] != sig_len:
+                valid = False
+                notes.append("Invalid signature length")
+        scheme_results.append((scheme, valid, notes))
+
+    if not scheme_results:
+        return "missing", None
+
+    if any(valid for _scheme, valid, _notes in scheme_results):
+        combined_notes = []
+        for scheme, valid, notes in scheme_results:
+            if notes:
+                label = "Gen1" if scheme == "gen1" else "Gen2"
+                combined_notes.append(f"{label}: {', '.join(notes)}")
+        return "valid", "; ".join(combined_notes) if combined_notes else None
+
+    combined_notes = []
+    for scheme, _valid, notes in scheme_results:
+        label = "Gen1" if scheme == "gen1" else "Gen2"
+        if notes:
+            combined_notes.append(f"{label}: {', '.join(notes)}")
+    return "invalid", "; ".join(combined_notes) if combined_notes else None
+
+
+def _get_card_file_data(
+    entries_by_id: dict, file_id: int, appendices: tuple[int, ...]
+) -> bytes | None:
+    for appendix in appendices:
+        for entry in entries_by_id.get(file_id, []):
+            if entry["appendix"] == appendix:
+                return entry["data"]
+    return None
+
+
+def _verify_driver_card_certificates(
+    ca_data: bytes, card_data: bytes
+) -> tuple[bool, str | None]:
+    if len(ca_data) < _CARD_CERT_LEN or len(card_data) < _CARD_CERT_LEN:
+        return False, "Certificate data truncated"
+    ca_ok, ca_content = _verify_driver_card_certificate(ca_data, _EU_RSA_N, _EU_RSA_E)
+    if not ca_ok or ca_content is None:
+        return False, "CA certificate invalid"
+    member_key_n = ca_content[28:156]
+    member_key_e = ca_content[156:164]
+    if len(member_key_n) != 128 or len(member_key_e) != 8:
+        return False, "Member state key invalid"
+    card_ok, _card_content = _verify_driver_card_certificate(
+        card_data, member_key_n, member_key_e
+    )
+    if not card_ok:
+        return False, "Card certificate invalid"
+    return True, None
+
+
+def _verify_driver_card_certificate(
+    data: bytes, key_n: bytes, key_e: bytes
+) -> tuple[bool, bytes | None]:
+    if len(data) < _CARD_CERT_LEN:
+        return False, None
+    signature = data[:128]
+    cndash = data[128:186]
+    decoded = _rsa_decode(signature, key_n, key_e)
+    if len(decoded) != _CARD_SIGNATURE_LEN:
+        return False, None
+    if decoded[0] != 0x6A or decoded[-1] != 0xBC:
+        return False, None
+    crdash = decoded[1:107]
+    hdash = decoded[107:127]
+    content = crdash + cndash
+    digest = hashlib.sha1(content).digest()
+    if digest != hdash:
+        return False, None
+    return True, content
+
+
+def _rsa_decode(signature: bytes, key_n: bytes, key_e: bytes) -> bytes:
+    modulus = int.from_bytes(key_n, "big")
+    exponent = int.from_bytes(key_e, "big")
+    value = pow(int.from_bytes(signature, "big"), exponent, modulus)
+    length = (modulus.bit_length() + 7) // 8
+    return value.to_bytes(length, "big")
 
 
 def _parse_vu_identification(

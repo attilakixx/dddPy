@@ -31,3 +31,8 @@ DDD file reader written in Python for VU and driver tachograph files.
 9. Packaging
    - Provide a CLI entry point for batch parsing.
    - Bundle the GUI as a standalone app (optional: PyInstaller).
+
+## Build executable
+- Install PyInstaller: `python3 -m pip install pyinstaller`
+- Linux: run `./build_linux.sh`
+- Windows: run `build_windows.bat`
