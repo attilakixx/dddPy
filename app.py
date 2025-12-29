@@ -46,6 +46,7 @@ class DddReaderApp(tk.Tk):
                 self.iconphoto(True, icon_image)
                 break
 
+        self.current_file_path = None
         self.file_path = tk.StringVar()
         self.status_text = tk.StringVar(value="No file selected.")
         self.validity_text = tk.StringVar(value="Validity: Not checked.")
@@ -1036,6 +1037,8 @@ class DddReaderApp(tk.Tk):
         if path:
             self.file_path.set(path)
             self.status_text.set(f"Selected: {Path(path).name}")
+            if not self.current_file_path:
+                self._open_file()
 
     def _open_file(self) -> None:
         path = self.file_path.get().strip()
@@ -1052,6 +1055,7 @@ class DddReaderApp(tk.Tk):
                 self.validity_text.set(f"Validity: Invalid — File ({exc})")
             self.validity_label.configure(style="Invalid.TLabel")
             self.file_type_text.set("File type: Unknown")
+            self.current_file_path = None
             self._clear_tree(self.header_tree)
             self._clear_tree(self.parts_tree)
             self._clear_tree(self.ident_tree)
@@ -1089,6 +1093,7 @@ class DddReaderApp(tk.Tk):
         self._update_activities_tab(summary)
         type_label = self._type_label(summary.header.detected_type)
         self.file_type_text.set(f"File type: {type_label}")
+        self.current_file_path = path
         generation_label = self._generation_label(summary.header.detected_generation)
         if generation_label:
             status = f"Detected: {type_label} ({generation_label}) | {Path(path).name}"
