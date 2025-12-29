@@ -1,2 +1,7 @@
 hidden/
 tachoPartValidatorSample/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
