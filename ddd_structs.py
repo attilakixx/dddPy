@@ -111,6 +111,36 @@ class VuOverview:
 
 
 @dataclass(frozen=True)
+class VuSensorPairedRecord:
+    sensor_serial_number: ExtendedSerialNumber
+    sensor_approval_number: str
+    pairing_time_raw: int | None
+    pairing_time_iso: str | None
+
+
+@dataclass(frozen=True)
+class VuCalibrationRecord:
+    calibration_purpose: int
+    workshop_name: NameValue
+    workshop_address: AddressValue
+    workshop_card: FullCardNumber
+    workshop_card_expiry_raw: int
+    workshop_card_expiry_iso: str | None
+    vin: str
+    registration_nation: int
+    registration_number: VehicleRegistrationNumber
+    vehicle_characteristic_constant: int
+    recording_equipment_constant: int
+
+
+@dataclass(frozen=True)
+class VuTechnicalData:
+    identification: VuIdentification | None
+    sensor_paired: VuSensorPairedRecord | None
+    calibration_records: tuple[VuCalibrationRecord, ...]
+
+
+@dataclass(frozen=True)
 class CardApplicationIdentification:
     card_type: int
     card_structure_version: int
@@ -403,6 +433,71 @@ def parse_full_card_number_gen2(reader: ByteReader) -> FullCardNumber:
     )
 
 
+def parse_full_card_number_gen1(reader: ByteReader) -> FullCardNumber:
+    card_type = reader.read_u8()
+    issuing_nation = reader.read_u8()
+    card_number = reader.read_fixed_str(16)
+    return FullCardNumber(
+        card_type=card_type,
+        issuing_nation=issuing_nation,
+        card_number=card_number,
+        card_generation=0,
+    )
+
+
+def parse_vu_sensor_paired_record(reader: ByteReader) -> VuSensorPairedRecord:
+    sensor_serial_number = parse_extended_serial_number(reader)
+    sensor_approval_number = reader.read_fixed_str(8)
+
+    remaining = reader.remaining()
+    if remaining >= 12:
+        reader.read_bytes(8)
+        pairing_bytes = reader.read_bytes(4)
+    elif remaining >= 4:
+        pairing_bytes = reader.read_bytes(4)
+    else:
+        pairing_bytes = b""
+
+    pairing_time_raw = None
+    pairing_time_iso = None
+    if pairing_bytes and pairing_bytes not in (b"\x00\x00\x00\x00", b"\xFF\xFF\xFF\xFF", b"\x20\x20\x20\x20"):
+        pairing_time_raw = int.from_bytes(pairing_bytes, "big")
+        pairing_time_iso = _time_real_to_iso(pairing_time_raw)
+
+    return VuSensorPairedRecord(
+        sensor_serial_number=sensor_serial_number,
+        sensor_approval_number=sensor_approval_number,
+        pairing_time_raw=pairing_time_raw,
+        pairing_time_iso=pairing_time_iso,
+    )
+
+
+def parse_vu_calibration_record(reader: ByteReader) -> VuCalibrationRecord:
+    calibration_purpose = reader.read_u8()
+    workshop_name = parse_name(reader)
+    workshop_address = parse_address(reader)
+    workshop_card = parse_full_card_number_gen1(reader)
+    workshop_card_expiry_raw = reader.read_time_real_raw()
+    vin = reader.read_fixed_str(17)
+    registration_nation = reader.read_u8()
+    registration_number = parse_vehicle_registration_number(reader)
+    vehicle_characteristic_constant = reader.read_u16_be()
+    recording_equipment_constant = reader.read_u16_be()
+    return VuCalibrationRecord(
+        calibration_purpose=calibration_purpose,
+        workshop_name=workshop_name,
+        workshop_address=workshop_address,
+        workshop_card=workshop_card,
+        workshop_card_expiry_raw=workshop_card_expiry_raw,
+        workshop_card_expiry_iso=_time_real_to_iso(workshop_card_expiry_raw),
+        vin=vin,
+        registration_nation=registration_nation,
+        registration_number=registration_number,
+        vehicle_characteristic_constant=vehicle_characteristic_constant,
+        recording_equipment_constant=recording_equipment_constant,
+    )
+
+
 def parse_vu_download_activity_data(reader: ByteReader) -> VuDownloadActivityData:
     downloading_time_raw = reader.read_u32_be()
     card_number = parse_full_card_number_gen2(reader)
@@ -670,6 +765,14 @@ def format_card_generation(value: int | None) -> str:
     return str(value)
 
 
+def format_vu_calibration_purpose(value: int) -> str:
+    labels = {
+        1: "Activation",
+        2: "First installation",
+    }
+    return labels.get(value, f"Purpose {value}")
+
+
 def format_specific_condition_type(condition_type: int) -> str:
     labels = {
         1: "Out Of Scope End",
@@ -715,7 +818,24 @@ def format_driver_event_type(event_type: int) -> str:
 
 
 def format_event_fault_type(event_type: int) -> str:
-    return _EVENT_FAULT_TYPES.get(event_type, f"Unknown (0x{event_type:02X})")
+    label = _EVENT_FAULT_TYPES.get(event_type)
+    if label:
+        return label
+    if 0x0A <= event_type <= 0x0F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x19 <= event_type <= 0x1F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x26 <= event_type <= 0x2F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x36 <= event_type <= 0x3F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x41 <= event_type <= 0x4F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x50 <= event_type <= 0x7F:
+        return f"RFU (0x{event_type:02X})"
+    if 0x80 <= event_type <= 0xFF:
+        return f"Manufacturer specific (0x{event_type:02X})"
+    return f"Unknown ({event_type})"
 
 
 def format_overspeed_event_type(event_type: int, record_purpose: int) -> str:
@@ -843,12 +963,38 @@ def _normalize_time_real(value: int) -> tuple[int | None, str | None]:
 
 
 _EVENT_FAULT_TYPES = {
+    0x00: "No further details",
+    0x01: "Insertion of a non-valid card",
+    0x02: "Card conflict",
+    0x03: "Time overlap",
     0x04: "Driving Without Appropriate Card",
     0x05: "Card Insertion While Driving",
+    0x06: "Last card session not correctly closed",
     0x07: "Overspeeding",
     0x08: "Power Supply Interruption",
     0x09: "Motion Data Error",
-    0x21: "SensorAuthenticationFailure",
+    0x10: "No further details",
+    0x11: "Motion sensor authentication failure",
+    0x12: "Tachograph card authentication failure",
+    0x13: "Unauthorised change of motion sensor",
+    0x14: "Card data input integrity error",
+    0x15: "Stored user data integrity error",
+    0x16: "Internal data transfer error",
+    0x17: "Unauthorised case opening",
+    0x18: "Hardware sabotage",
+    0x20: "No further details",
+    0x21: "Authentication failure",
+    0x22: "Stored data integrity error",
+    0x23: "Internal data transfer error",
+    0x24: "Unauthorised case opening",
+    0x25: "Hardware sabotage",
+    0x30: "No further details",
+    0x31: "VU internal fault",
+    0x32: "Printer fault",
+    0x33: "Display fault",
+    0x34: "Downloading fault",
+    0x35: "Sensor fault",
+    0x40: "No further details",
 }
 
 

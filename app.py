@@ -30,6 +30,7 @@ from ddd_structs import (
     format_gnss_coordinate,
     format_slot,
     format_time_real,
+    format_vu_calibration_purpose,
     is_card_number_missing,
 )
 
@@ -250,6 +251,9 @@ class DddReaderApp(tk.Tk):
             self._clear_tree(self.parts_tree)
             self._clear_tree(self.ident_tree)
             self._clear_tree(self.overview_tree)
+            self._clear_tree(self.tech_ident_tree)
+            self._clear_tree(self.sensor_tree)
+            self._clear_tree(self.calibration_tree)
             self._clear_tree(self.company_locks_tree)
             self._clear_tree(self.control_tree)
             self._clear_tree(self.faults_tree)
@@ -281,6 +285,7 @@ class DddReaderApp(tk.Tk):
         self._update_parts_view(summary.parts)
         self._update_identification_view(summary.vu_identification)
         self._update_report_view(summary)
+        self._update_technical_view(summary.technical_data)
         self._update_events_tab(summary)
         self._update_driver_card_view(summary.driver_card)
         self._update_activities_tab(summary)
@@ -407,6 +412,79 @@ class DddReaderApp(tk.Tk):
         self._update_overview_view(overview)
         self._update_company_locks_view(overview.company_locks if overview else ())
         self._update_control_activities_view(overview.control_activities if overview else ())
+
+    def _update_technical_view(self, technical) -> None:
+        self._clear_tree(self.tech_ident_tree)
+        self._clear_tree(self.sensor_tree)
+        self._clear_tree(self.calibration_tree)
+
+        if technical is None:
+            self.tech_ident_tree.insert("", "end", text="Status", values=("Not detected",))
+            self.sensor_tree.insert("", "end", text="Status", values=("Not detected",))
+            self.calibration_tree.insert(
+                "", "end", values=("Not detected", "", "", "", "", "", "", "", "")
+            )
+            return
+
+        ident = technical.identification
+        if ident is None:
+            self.tech_ident_tree.insert("", "end", text="Status", values=("Not detected",))
+        else:
+            entries = [
+                ("Manufacturer name", ident.manufacturer_name.text),
+                ("Manufacturer address", ident.manufacturer_address.text),
+                ("Part number", ident.part_number),
+                ("Approval number", ident.approval_number.strip()),
+                ("Serial number", str(ident.serial_number.serial_number)),
+                ("Serial month/year", ident.serial_number.month_year_bcd),
+                ("Serial type", f"0x{ident.serial_number.equipment_type:02X}"),
+                ("Manufacturer code", str(ident.serial_number.manufacturer_code)),
+                ("Software version", ident.software_identification.version),
+                (
+                    "Software install time",
+                    format_time_real(ident.software_identification.installation_time_raw),
+                ),
+                ("Manufacturing date", format_time_real(ident.manufacturing_date_raw)),
+            ]
+            for field, value in entries:
+                self.tech_ident_tree.insert("", "end", text=field, values=(value,))
+
+        sensor = technical.sensor_paired
+        if sensor is None:
+            self.sensor_tree.insert("", "end", text="Status", values=("Not detected",))
+        else:
+            sensor_entries = [
+                ("Sensor serial number", str(sensor.sensor_serial_number.serial_number)),
+                ("Sensor approval number", sensor.sensor_approval_number),
+                ("First pairing time", format_time_real(sensor.pairing_time_raw)),
+            ]
+            for field, value in sensor_entries:
+                self.sensor_tree.insert("", "end", text=field, values=(value,))
+
+        if not technical.calibration_records:
+            self.calibration_tree.insert(
+                "", "end", values=("Not detected", "", "", "", "", "", "", "", "")
+            )
+            return
+
+        for record in technical.calibration_records:
+            registration = record.registration_number.registration_number
+            registration_label = f"{format_nation_numeric(record.registration_nation)} {registration}".strip()
+            self.calibration_tree.insert(
+                "",
+                "end",
+                values=(
+                    format_vu_calibration_purpose(record.calibration_purpose),
+                    record.workshop_name.text,
+                    record.workshop_address.text,
+                    format_event_card_slot(record.workshop_card),
+                    format_time_real(record.workshop_card_expiry_raw),
+                    record.vin,
+                    registration_label,
+                    str(record.vehicle_characteristic_constant),
+                    str(record.recording_equipment_constant),
+                ),
+            )
 
     def _update_events_tab(self, summary) -> None:
         self._update_overspeed_control_view(summary.overspeed_control)
@@ -1131,6 +1209,7 @@ class DddReaderApp(tk.Tk):
             (
                 summary.vu_identification is not None,
                 summary.overview is not None,
+                summary.technical_data is not None,
                 bool(summary.activity_days),
                 bool(summary.events),
                 bool(summary.faults),

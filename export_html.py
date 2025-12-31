@@ -27,6 +27,7 @@ from ddd_structs import (
     format_slot,
     format_time_real,
     format_card_generation,
+    format_vu_calibration_purpose,
     is_card_number_missing,
 )
 
@@ -60,6 +61,16 @@ def build_html(
     def field_table(entries) -> str:
         rows = [(label, value) for label, value in entries]
         return table(("Field", "Value"), rows)
+
+    def format_card_label(card) -> str:
+        if is_card_number_missing(card):
+            return "Not inserted"
+        parts = [
+            format_card_type(card.card_type),
+            format_nation_numeric(card.issuing_nation),
+            card.card_number,
+        ]
+        return " ".join(part for part in parts if part)
 
     header = summary.header
     type_label_text = type_label(header.detected_type)
@@ -277,6 +288,104 @@ def build_html(
                 control_rows,
             )
 
+        technical = summary.technical_data
+        if technical is None:
+            tech_ident_section = field_table([("Status", "Not detected")])
+            sensor_section = field_table([("Status", "Not detected")])
+            calibration_table = table(
+                (
+                    "Purpose",
+                    "Workshop Name",
+                    "Workshop Address",
+                    "Workshop Card",
+                    "Card Expiry",
+                    "VIN",
+                    "Registration",
+                    "Vehicle Constant",
+                    "Recording Constant",
+                ),
+                [("Not detected", "", "", "", "", "", "", "", "")],
+            )
+        else:
+            ident = technical.identification
+            if ident is None:
+                tech_ident_section = field_table([("Status", "Not detected")])
+            else:
+                ident_entries = [
+                    ("Manufacturer name", ident.manufacturer_name.text),
+                    ("Manufacturer address", ident.manufacturer_address.text),
+                    ("Part number", ident.part_number),
+                    ("Approval number", ident.approval_number.strip()),
+                    ("Serial number", ident.serial_number.serial_number),
+                    ("Serial month/year", ident.serial_number.month_year_bcd),
+                    ("Serial type", f"0x{ident.serial_number.equipment_type:02X}"),
+                    ("Manufacturer code", ident.serial_number.manufacturer_code),
+                    ("Software version", ident.software_identification.version),
+                    (
+                        "Software installation time",
+                        format_time_real(ident.software_identification.installation_time_raw),
+                    ),
+                    ("Manufacturing date", format_time_real(ident.manufacturing_date_raw)),
+                ]
+                tech_ident_section = field_table(ident_entries)
+
+            sensor = technical.sensor_paired
+            if sensor is None:
+                sensor_section = field_table([("Status", "Not detected")])
+            else:
+                sensor_entries = [
+                    ("Sensor serial number", sensor.sensor_serial_number.serial_number),
+                    ("Sensor approval number", sensor.sensor_approval_number),
+                    ("First pairing time", format_time_real(sensor.pairing_time_raw)),
+                ]
+                sensor_section = field_table(sensor_entries)
+
+            calibration_rows = []
+            for record in technical.calibration_records:
+                registration = (
+                    f"{format_nation_numeric(record.registration_nation)} "
+                    f"{record.registration_number.registration_number}"
+                ).strip()
+                calibration_rows.append(
+                    (
+                        format_vu_calibration_purpose(record.calibration_purpose),
+                        record.workshop_name.text,
+                        record.workshop_address.text,
+                        format_card_label(record.workshop_card),
+                        format_time_real(record.workshop_card_expiry_raw),
+                        record.vin,
+                        registration,
+                        record.vehicle_characteristic_constant,
+                        record.recording_equipment_constant,
+                    )
+                )
+            if not calibration_rows:
+                calibration_rows = [("Not detected", "", "", "", "", "", "", "", "")]
+            calibration_table = table(
+                (
+                    "Purpose",
+                    "Workshop Name",
+                    "Workshop Address",
+                    "Workshop Card",
+                    "Card Expiry",
+                    "VIN",
+                    "Registration",
+                    "Vehicle Constant",
+                    "Recording Constant",
+                ),
+                calibration_rows,
+            )
+
+        technical_section = f"""
+              <h3>Technical data</h3>
+              <h4>Technical identification</h4>
+              {tech_ident_section}
+              <h4>Sensor pairing</h4>
+              {sensor_section}
+              <h4>Calibration records</h4>
+              {calibration_table}
+        """
+
         sections.append(
             f"""
             <section class="card">
@@ -289,6 +398,7 @@ def build_html(
               {locks_table}
               <h3>Control activities</h3>
               {controls_table}
+              {technical_section}
             </section>
             """
         )

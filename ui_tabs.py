@@ -141,10 +141,12 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
 
     ident_tab = ttk.Frame(vu_notebook)
     report_tab = ttk.Frame(vu_notebook)
+    technical_tab = ttk.Frame(vu_notebook)
     events_tab = ttk.Frame(vu_notebook)
     activities_tab = ttk.Frame(vu_notebook)
     vu_notebook.add(ident_tab, text="Identification")
     vu_notebook.add(report_tab, text="Report")
+    vu_notebook.add(technical_tab, text="Technical Data")
     vu_notebook.add(events_tab, text="Events/Faults")
     vu_notebook.add(activities_tab, text="Activities")
 
@@ -297,6 +299,118 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
 
     app.control_tree.grid(row=0, column=0, sticky="nsew")
     controls_scrollbar.grid(row=0, column=1, sticky="ns")
+
+    technical = ttk.Frame(technical_tab, padding=12)
+    technical.grid(row=0, column=0, sticky="nsew")
+    technical_tab.columnconfigure(0, weight=1)
+    technical_tab.rowconfigure(0, weight=1)
+    technical.columnconfigure(0, weight=1)
+    technical.rowconfigure(1, weight=1)
+    technical.rowconfigure(3, weight=1)
+    technical.rowconfigure(5, weight=1)
+
+    ttk.Label(technical, text="Technical identification:").grid(
+        row=0, column=0, sticky="w", pady=(0, 6)
+    )
+
+    tech_ident_frame = ttk.Frame(technical)
+    tech_ident_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 12))
+    tech_ident_frame.columnconfigure(0, weight=1)
+    tech_ident_frame.rowconfigure(0, weight=1)
+
+    app.tech_ident_tree = ttk.Treeview(
+        tech_ident_frame, columns=("value",), show="tree headings", height=7
+    )
+    app.tech_ident_tree.heading("#0", text="Field")
+    app.tech_ident_tree.heading("value", text="Value")
+    app.tech_ident_tree.column("#0", width=220, anchor="w")
+    app.tech_ident_tree.column("value", anchor="w")
+
+    tech_ident_scrollbar = ttk.Scrollbar(
+        tech_ident_frame, orient="vertical", command=app.tech_ident_tree.yview
+    )
+    app.tech_ident_tree.configure(yscrollcommand=tech_ident_scrollbar.set)
+
+    app.tech_ident_tree.grid(row=0, column=0, sticky="nsew")
+    tech_ident_scrollbar.grid(row=0, column=1, sticky="ns")
+
+    ttk.Label(technical, text="Sensor pairing:").grid(
+        row=2, column=0, sticky="w", pady=(0, 6)
+    )
+
+    sensor_frame = ttk.Frame(technical)
+    sensor_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 12))
+    sensor_frame.columnconfigure(0, weight=1)
+    sensor_frame.rowconfigure(0, weight=1)
+
+    app.sensor_tree = ttk.Treeview(
+        sensor_frame, columns=("value",), show="tree headings", height=4
+    )
+    app.sensor_tree.heading("#0", text="Field")
+    app.sensor_tree.heading("value", text="Value")
+    app.sensor_tree.column("#0", width=220, anchor="w")
+    app.sensor_tree.column("value", anchor="w")
+
+    sensor_scrollbar = ttk.Scrollbar(
+        sensor_frame, orient="vertical", command=app.sensor_tree.yview
+    )
+    app.sensor_tree.configure(yscrollcommand=sensor_scrollbar.set)
+
+    app.sensor_tree.grid(row=0, column=0, sticky="nsew")
+    sensor_scrollbar.grid(row=0, column=1, sticky="ns")
+
+    ttk.Label(technical, text="Calibration records:").grid(
+        row=4, column=0, sticky="w", pady=(0, 6)
+    )
+
+    calibration_frame = ttk.Frame(technical)
+    calibration_frame.grid(row=5, column=0, sticky="nsew")
+    calibration_frame.columnconfigure(0, weight=1)
+    calibration_frame.rowconfigure(0, weight=1)
+
+    app.calibration_tree = ttk.Treeview(
+        calibration_frame,
+        columns=(
+            "purpose",
+            "workshop",
+            "address",
+            "card",
+            "expiry",
+            "vin",
+            "registration",
+            "vehicle_constant",
+            "recording_constant",
+        ),
+        show="headings",
+        height=7,
+    )
+    app.calibration_tree.heading("purpose", text="Purpose")
+    app.calibration_tree.heading("workshop", text="Workshop Name")
+    app.calibration_tree.heading("address", text="Workshop Address")
+    app.calibration_tree.heading("card", text="Workshop Card")
+    app.calibration_tree.heading("expiry", text="Card Expiry")
+    app.calibration_tree.heading("vin", text="VIN")
+    app.calibration_tree.heading("registration", text="Registration")
+    app.calibration_tree.heading("vehicle_constant", text="Vehicle Constant")
+    app.calibration_tree.heading("recording_constant", text="Recording Constant")
+
+    app.calibration_tree.column("purpose", width=140, anchor="w")
+    app.calibration_tree.column("workshop", width=180, anchor="w")
+    app.calibration_tree.column("address", width=220, anchor="w")
+    app.calibration_tree.column("card", width=180, anchor="w")
+    app.calibration_tree.column("expiry", width=160, anchor="w")
+    app.calibration_tree.column("vin", width=180, anchor="w")
+    app.calibration_tree.column("registration", width=160, anchor="w")
+    app.calibration_tree.column("vehicle_constant", width=130, anchor="w")
+    app.calibration_tree.column("recording_constant", width=150, anchor="w")
+
+    calibration_scrollbar = ttk.Scrollbar(
+        calibration_frame, orient="vertical", command=app.calibration_tree.yview
+    )
+    app.calibration_tree.configure(yscrollcommand=calibration_scrollbar.set)
+
+    app.calibration_tree.grid(row=0, column=0, sticky="nsew")
+    calibration_scrollbar.grid(row=0, column=1, sticky="ns")
 
     events = ttk.Frame(events_tab, padding=12)
     events.grid(row=0, column=0, sticky="nsew")

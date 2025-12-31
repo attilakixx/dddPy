@@ -37,8 +37,11 @@ from ddd_structs import (
     parse_vu_control_activity,
     parse_vu_download_activity_data,
     parse_vu_identification,
+    parse_vu_sensor_paired_record,
+    parse_vu_calibration_record,
     parse_full_card_number_gen2,
     time_real_to_iso,
+    VuTechnicalData,
 )
 
 HEADER_READ_LEN = 32
@@ -252,6 +255,7 @@ class DddSummary:
     faults: tuple[FaultRecord, ...]
     overspeed_control: VuOverSpeedingControlData | None
     overspeed_events: tuple[OverspeedingEventRecord, ...]
+    technical_data: VuTechnicalData | None
     driver_card: DriverCardSummary | None
 
 
@@ -275,6 +279,7 @@ def parse_summary(path: str | Path) -> DddSummary:
     events, faults, overspeed_control, overspeed_events = _parse_events_faults(
         data, header
     )
+    technical_data = _parse_technical_data(data, header)
     return DddSummary(
         header=header,
         parts=parts,
@@ -285,6 +290,7 @@ def parse_summary(path: str | Path) -> DddSummary:
         faults=faults,
         overspeed_control=overspeed_control,
         overspeed_events=overspeed_events,
+        technical_data=technical_data,
         driver_card=driver_card,
     )
 
@@ -1018,12 +1024,107 @@ def _parse_overview(data: bytes, header: DddHeader) -> VuOverview | None:
 
     offsets = list(_iter_trep_offsets(data))
     for idx, (_offset, trep) in enumerate(offsets):
-        if trep in {0x21, 0x31, 0x01}:
+        if trep in {0x21, 0x31}:
             segment = _slice_segment(data, offsets, idx)
-            if trep == 0x21:
-                return _parse_overview_gen2(segment)
-            # TODO: Add parsers for TREP 0x01 and 0x31.
+            return _parse_overview_gen2(segment)
+        if trep == 0x01:
+            # TODO: Add parser for TREP 0x01 (Gen1 overview).
+            continue
     return None
+
+
+def _parse_technical_data(
+    data: bytes, header: DddHeader
+) -> VuTechnicalData | None:
+    if header.detected_type != "vehicle_unit":
+        return None
+
+    identification = None
+    sensor_paired = None
+    calibration_records: list = []
+
+    offsets = list(_iter_trep_offsets(data))
+    for idx, (segment_offset, trep) in enumerate(offsets):
+        if trep not in _TECH_TREPS:
+            continue
+        segment = _slice_segment(data, offsets, idx)
+        reader = ByteReader(segment)
+        if reader.remaining() < 2:
+            continue
+        reader.read_u8()
+        reader.read_u8()
+
+        while reader.remaining() >= 5:
+            record_type = reader.read_u8()
+            record_size = reader.read_u16_be()
+            record_count = reader.read_u16_be()
+            total = record_size * record_count
+            if reader.remaining() < total:
+                break
+            record_data = reader.read_bytes(total)
+
+            if record_count == 0:
+                continue
+
+            if record_type == 0x19:
+                chunk = record_data[:record_size]
+                try:
+                    record_reader = ByteReader(chunk)
+                    (
+                        manufacturer_name,
+                        manufacturer_address,
+                        part_number,
+                        serial_number,
+                        software_identification,
+                        manufacturing_date_raw,
+                        manufacturing_date_iso,
+                        approval_number,
+                    ) = parse_vu_identification(record_reader)
+                except ValueError:
+                    continue
+                identification = VuIdentification(
+                    manufacturer_name=manufacturer_name,
+                    manufacturer_address=manufacturer_address,
+                    part_number=part_number,
+                    serial_number=serial_number,
+                    software_identification=software_identification,
+                    manufacturing_date_raw=manufacturing_date_raw,
+                    manufacturing_date_iso=manufacturing_date_iso,
+                    approval_number=approval_number,
+                    source_trep=trep,
+                    source_offset=segment_offset,
+                    prefix_bytes=0,
+                    heuristic=False,
+                )
+            elif record_type == 0x20:
+                chunk = record_data[:record_size]
+                try:
+                    sensor_paired = parse_vu_sensor_paired_record(ByteReader(chunk))
+                except ValueError:
+                    continue
+            elif record_type == 0x0C:
+                offset = 0
+                for _ in range(record_count):
+                    chunk = record_data[offset:offset + record_size]
+                    if len(chunk) < record_size:
+                        break
+                    try:
+                        record_reader = ByteReader(chunk)
+                        calibration_records.append(
+                            parse_vu_calibration_record(record_reader)
+                        )
+                    except ValueError:
+                        break
+                    offset += record_size
+
+    if not (identification or sensor_paired or calibration_records):
+        return None
+
+    return VuTechnicalData(
+        identification=identification,
+        sensor_paired=sensor_paired,
+        calibration_records=tuple(calibration_records),
+    )
 
 
 def _parse_overview_gen2(segment: bytes) -> VuOverview:
@@ -1102,7 +1203,7 @@ def _parse_activities(
     days: list[ActivityDay] = []
     offsets = list(_iter_trep_offsets(data))
     for idx, (_offset, trep) in enumerate(offsets):
-        if trep != 0x22:
+        if trep not in {0x22, 0x32}:
             continue
         segment = _slice_segment(data, offsets, idx)
         day = _parse_activity_segment(segment)
