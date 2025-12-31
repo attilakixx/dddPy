@@ -65,7 +65,10 @@ class DddReaderApp(tk.Tk):
         self.overspeed_count_var = tk.StringVar(value="")
         self.activity_day_var = tk.StringVar()
         self._activity_day_map = {}
-        self._current_activity_day = None
+        self._activity_days = ()
+        self._activity_header_items_by_day = {}
+        self._activity_item_day = {}
+        self._current_chart_days = ()
 
         self._apply_theme()
         self._build_ui()
@@ -273,6 +276,11 @@ class DddReaderApp(tk.Tk):
             self.activity_canvas.delete("all")
             self.activity_day_combo["values"] = ()
             self.activity_day_var.set("")
+            self._activity_days = ()
+            self._activity_day_map = {}
+            self._activity_header_items_by_day = {}
+            self._activity_item_day = {}
+            self._current_chart_days = ()
             self.overspeed_last_control_var.set("")
             self.overspeed_first_since_var.set("")
             self.overspeed_count_var.set("")
@@ -519,9 +527,9 @@ class DddReaderApp(tk.Tk):
         self._update_card_units_view(driver_card.vehicle_units)
 
     def _update_activities_tab(self, summary) -> None:
-        self._update_activity_header_view(summary.activity_days)
-        self._update_activities_view(summary.activity_days)
-        self._update_activity_chart(summary.activity_days)
+        self._set_activity_days(summary.activity_days)
+        self._update_activity_header_view(self._activity_days)
+        self._refresh_activity_views()
 
     def _update_overview_view(self, overview) -> None:
         self._clear_tree(self.overview_tree)
@@ -956,6 +964,8 @@ class DddReaderApp(tk.Tk):
 
     def _update_activity_header_view(self, days) -> None:
         self._clear_tree(self.activity_header_tree)
+        self._activity_header_items_by_day = {}
+        self._activity_item_day = {}
         if not days:
             self.activity_header_tree.insert(
                 "",
@@ -963,8 +973,9 @@ class DddReaderApp(tk.Tk):
                 values=("Not detected", "", "", "", "", "", "", "", "", "", ""),
             )
             return
-        sorted_days = self._sort_by_time_desc(days, lambda item: item.date_raw)
-        for day in sorted_days:
+        for day in days:
+            label = self._day_label(day.date_raw)
+            self._activity_header_items_by_day[label] = []
             date_label = format_time_real(day.date_raw)
             first_row = True
             for record in day.card_iw_records:
@@ -974,7 +985,7 @@ class DddReaderApp(tk.Tk):
                     reg = record.previous_vehicle_reg.registration_number
                     prev_vehicle = f"{nation} {reg}".strip()
 
-                self.activity_header_tree.insert(
+                item_id = self.activity_header_tree.insert(
                     "",
                     "end",
                     values=(
@@ -993,6 +1004,8 @@ class DddReaderApp(tk.Tk):
                         format_time_real(record.previous_withdrawal_time_raw),
                     ),
                 )
+                self._activity_header_items_by_day[label].append(item_id)
+                self._activity_item_day[item_id] = day
                 first_row = False
 
     def _update_activities_view(self, days) -> None:
@@ -1004,8 +1017,7 @@ class DddReaderApp(tk.Tk):
                 values=("Not detected", "", "", "", "", "", "", ""),
             )
             return
-        sorted_days = self._sort_by_time_desc(days, lambda item: item.date_raw)
-        for day in sorted_days:
+        for day in days:
             date_label = format_time_real(day.date_raw)
             odometer = str(day.odometer_midnight) if day.odometer_midnight is not None else ""
             first_row = True
@@ -1026,16 +1038,16 @@ class DddReaderApp(tk.Tk):
                 )
                 first_row = False
 
-    def _update_activity_chart(self, days) -> None:
+    def _set_activity_days(self, days) -> None:
         if not days:
+            self._activity_days = ()
             self._activity_day_map = {}
             self.activity_day_combo["values"] = ()
             self.activity_day_var.set("")
-            self.activity_canvas.delete("all")
-            self._current_activity_day = None
             return
 
         sorted_days = self._sort_by_time_desc(days, lambda item: item.date_raw)
+        self._activity_days = tuple(sorted_days)
         labels = []
         self._activity_day_map = {}
         for day in sorted_days:
@@ -1044,112 +1056,183 @@ class DddReaderApp(tk.Tk):
             self._activity_day_map[label] = day
 
         self.activity_day_combo["values"] = tuple(labels)
-        latest_label = labels[0]
-        self.activity_day_var.set(latest_label)
-        self._current_activity_day = self._activity_day_map[latest_label]
-        self._draw_activity_chart(self._current_activity_day)
+        self.activity_day_var.set("")
 
     def _on_day_selected(self, _event) -> None:
         label = self.activity_day_var.get()
+        if label not in self._activity_day_map:
+            return
+        self.activity_header_tree.selection_remove(self.activity_header_tree.selection())
+        items = self._activity_header_items_by_day.get(label, [])
+        if items:
+            self.activity_header_tree.selection_set(items)
+            self.activity_header_tree.see(items[0])
+            self._refresh_activity_views()
+            return
+
         day = self._activity_day_map.get(label)
         if day is None:
             return
-        self._current_activity_day = day
-        self._draw_activity_chart(day)
+        self._update_activities_view([day])
+        self._draw_activity_chart([day])
+        self._current_chart_days = (day,)
+
+    def _on_activity_header_selected(self, _event) -> None:
+        self._refresh_activity_views()
 
     def _on_canvas_resize(self, _event) -> None:
-        if self._current_activity_day is not None:
-            self._draw_activity_chart(self._current_activity_day)
+        if self._current_chart_days:
+            self._draw_activity_chart(self._current_chart_days)
 
-    def _draw_activity_chart(self, day) -> None:
+    def _draw_activity_chart(self, days) -> None:
         canvas = self.activity_canvas
         canvas.delete("all")
+        if not days:
+            canvas.configure(scrollregion=(0, 0, 0, 0))
+            return
 
         width = canvas.winfo_width()
-        height = canvas.winfo_height()
-        if width < 50 or height < 50:
+        if width < 50:
             return
 
         margin_left = 70
         margin_right = 20
-        timeline_top = 30
-        row_height = 18
-        row_gap = 22
-
+        row_gap = 32
+        timeline_top = 40
+        day_label_gap = 24
         usable_width = max(1, width - margin_left - margin_right)
         scale = usable_width / 1440.0
 
-        axis_y = timeline_top - 12
-        for hour in range(0, 25, 2):
-            x = margin_left + hour * 60 * scale
-            canvas.create_line(x, axis_y, x, axis_y + 6, fill="#666666")
+        y_offset = 0
+        per_day_height = max(200, int(canvas.winfo_height() * 0.85))
+        for day in days:
+            row_height = int(
+                max(
+                    24,
+                    (per_day_height - timeline_top - day_label_gap - row_gap - 10) / 2,
+                )
+            )
+            axis_y = y_offset + timeline_top - 20
+            for hour in range(0, 25, 2):
+                x = margin_left + hour * 60 * scale
+                canvas.create_line(x, axis_y, x, axis_y + 6, fill="#666666")
+                canvas.create_text(
+                    x,
+                    axis_y - 2,
+                    text=str(hour),
+                    fill="#444444",
+                    anchor="s",
+                    font=("TkDefaultFont", 8),
+                )
+
+            row_positions = {
+                0: y_offset + timeline_top,
+                1: y_offset + timeline_top + row_height + row_gap,
+            }
+
             canvas.create_text(
-                x,
-                axis_y - 2,
-                text=str(hour),
-                fill="#444444",
-                anchor="s",
-                font=("TkDefaultFont", 8),
+                8,
+                row_positions[0] + row_height / 2,
+                text="Driver",
+                anchor="w",
+                fill="#222222",
+            )
+            canvas.create_text(
+                8,
+                row_positions[1] + row_height / 2,
+                text="Codriver",
+                anchor="w",
+                fill="#222222",
             )
 
-        row_positions = {
-            0: timeline_top,
-            1: timeline_top + row_height + row_gap,
-        }
+            for segment in day.segments:
+                row_y = row_positions.get(segment.slot)
+                if row_y is None:
+                    continue
+                x1 = margin_left + segment.start_minute * scale
+                x2 = margin_left + segment.end_minute * scale
+                if x2 <= x1:
+                    continue
+                color = self._activity_color(segment.activity, segment.card_status)
+                bar_height = self._activity_bar_height(
+                    segment.activity, segment.card_status, row_height
+                )
+                canvas.create_rectangle(
+                    x1,
+                    row_y + (row_height - bar_height),
+                    x2,
+                    row_y + row_height,
+                    fill=color,
+                    outline="",
+                )
 
-        canvas.create_text(
-            8,
-            row_positions[0] + row_height / 2,
-            text="Driver",
-            anchor="w",
-            fill="#222222",
-        )
-        canvas.create_text(
-            8,
-            row_positions[1] + row_height / 2,
-            text="Codriver",
-            anchor="w",
-            fill="#222222",
-        )
-
-        for segment in day.segments:
-            row_y = row_positions.get(segment.slot)
-            if row_y is None:
-                continue
-            x1 = margin_left + segment.start_minute * scale
-            x2 = margin_left + segment.end_minute * scale
-            if x2 <= x1:
-                continue
-            color = self._activity_color(segment.activity, segment.card_status)
-            canvas.create_rectangle(
-                x1,
-                row_y,
-                x2,
-                row_y + row_height,
-                fill=color,
-                outline="",
+            canvas.create_text(
+                margin_left,
+                y_offset + timeline_top + row_height + row_gap + row_height + 10,
+                text=self._day_label(day.date_raw),
+                anchor="w",
+                fill="#333333",
             )
+            day_height = timeline_top + row_height * 2 + row_gap + day_label_gap + 10
+            y_offset += day_height
 
-        canvas.create_text(
-            margin_left,
-            timeline_top + row_height + row_gap + row_height + 10,
-            text=self._day_label(day.date_raw),
-            anchor="w",
-            fill="#333333",
-        )
+        total_height = max(canvas.winfo_height(), int(y_offset))
+        canvas.configure(scrollregion=(0, 0, width, total_height))
+
+    def _get_selected_activity_days(self) -> list:
+        selected = self.activity_header_tree.selection()
+        if not selected:
+            return []
+        days = []
+        seen = set()
+        for item_id in selected:
+            day = self._activity_item_day.get(item_id)
+            if day is None or day.date_raw in seen:
+                continue
+            seen.add(day.date_raw)
+            days.append(day)
+        return self._sort_by_time_desc(days, lambda item: item.date_raw)
+
+    def _refresh_activity_views(self) -> None:
+        if not self._activity_days:
+            self._update_activities_view(())
+            self._draw_activity_chart(())
+            self._current_chart_days = ()
+            return
+
+        selected_days = self._get_selected_activity_days()
+        days = selected_days if selected_days else list(self._activity_days)
+        self._update_activities_view(days)
+        self._draw_activity_chart(days)
+        self._current_chart_days = tuple(days)
 
     def _activity_color(self, activity: int, card_status: int) -> str:
         if card_status == 1:
-            return "#E0E0E0"
+            return "#E00000"
         if activity == 0:
-            return "#CFE8D5"
+            return "#F4A000"
         if activity == 1:
-            return "#D7E5FA"
+            return "#F6F000"
         if activity == 2:
-            return "#F7E0A3"
+            return "#1A35FF"
         if activity == 3:
-            return "#F2B8A2"
-        return "#E0E0E0"
+            return "#1AA31A"
+        return "#E00000"
+
+    def _activity_bar_height(
+        self, activity: int, card_status: int, max_height: int
+    ) -> int:
+        if card_status == 1:
+            return max(6, int(max_height * 0.4))
+        if activity == 0:
+            return max(6, int(max_height * 0.4))
+        if activity == 1:
+            return max(8, int(max_height * 0.55))
+        if activity == 2:
+            return max(10, int(max_height * 0.7))
+        if activity == 3:
+            return max(12, int(max_height * 0.9))
+        return max(6, int(max_height * 0.4))
 
     def _day_label(self, timestamp: int) -> str:
         date = datetime.fromtimestamp(timestamp, tz=timezone.utc)

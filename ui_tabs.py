@@ -609,10 +609,10 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
     activities_tab.columnconfigure(0, weight=1)
     activities_tab.rowconfigure(0, weight=1)
     activities.columnconfigure(0, weight=1)
-    activities.rowconfigure(1, weight=1)
+    activities.rowconfigure(1, weight=2)
     activities.rowconfigure(3, weight=0)
-    activities.rowconfigure(5, weight=1)
-    activities.rowconfigure(7, weight=1)
+    activities.rowconfigure(4, weight=1)
+    activities.rowconfigure(6, weight=1)
 
     ttk.Label(activities, text="Activity header:").grid(
         row=0, column=0, sticky="w", pady=(0, 6)
@@ -676,9 +676,10 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
 
     app.activity_header_tree.grid(row=0, column=0, sticky="nsew")
     activity_header_scrollbar.grid(row=0, column=1, sticky="ns")
+    app.activity_header_tree.bind("<<TreeviewSelect>>", app._on_activity_header_selected)
 
     chart_header = ttk.Frame(activities)
-    chart_header.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+    chart_header.grid(row=2, column=0, sticky="ew", pady=(0, 2))
     chart_header.columnconfigure(1, weight=1)
 
     ttk.Label(chart_header, text="Activities (chart):").grid(
@@ -696,22 +697,29 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
     app.activity_day_combo.bind("<<ComboboxSelected>>", app._on_day_selected)
 
     legend = ttk.Frame(activities)
-    legend.grid(row=3, column=0, sticky="w", pady=(0, 6))
+    legend.grid(row=3, column=0, sticky="w", pady=(0, 2))
 
-    app._add_legend_item(legend, "Rest", "#CFE8D5", 0)
-    app._add_legend_item(legend, "Availability", "#D7E5FA", 1)
-    app._add_legend_item(legend, "Work", "#F7E0A3", 2)
-    app._add_legend_item(legend, "Driving", "#F2B8A2", 3)
-    app._add_legend_item(legend, "Unknown", "#E0E0E0", 4)
+    app._add_legend_item(legend, "Rest", "#F4A000", 0)
+    app._add_legend_item(legend, "Availability", "#F6F000", 1)
+    app._add_legend_item(legend, "Work", "#1A35FF", 2)
+    app._add_legend_item(legend, "Driving", "#1AA31A", 3)
+    app._add_legend_item(legend, "Unknown", "#E00000", 4)
 
     chart_frame = ttk.Frame(activities)
-    chart_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 12))
+    chart_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 6))
     chart_frame.columnconfigure(0, weight=1)
     chart_frame.rowconfigure(0, weight=1)
 
-    app.activity_canvas = tk.Canvas(chart_frame, height=140, bg="white")
+    app.activity_canvas = tk.Canvas(chart_frame, height=280, bg="white")
     app.activity_canvas.grid(row=0, column=0, sticky="nsew")
     app.activity_canvas.bind("<Configure>", app._on_canvas_resize)
+
+    chart_scrollbar = ttk.Scrollbar(
+        chart_frame, orient="vertical", command=app.activity_canvas.yview
+    )
+    app.activity_canvas.configure(yscrollcommand=chart_scrollbar.set)
+
+    chart_scrollbar.grid(row=0, column=1, sticky="ns")
 
     ttk.Label(activities, text="Activities (timeline):").grid(
         row=5, column=0, sticky="w", pady=(0, 6)
@@ -735,7 +743,7 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
             "odometer",
         ),
         show="headings",
-        height=10,
+        height=6,
     )
     app.activities_tree.heading("date", text="Date")
     app.activities_tree.heading("slot", text="Slot")
