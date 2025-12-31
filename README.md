@@ -13,9 +13,9 @@ DDD file reader written in Python for VU and driver tachograph files.
 - Export the parsed view to HTML.
 
 ## Screenshots
-![dddPy screenshot](assets/Screenshot from 2025-12-31 15-35-13.png)
-![dddPy screenshot](assets/Screenshot from 2025-12-31 15-35-22.png)
-![dddPy screenshot](assets/Screenshot from 2025-12-31 15-35-24.png)
+![dddPy screenshot](assets/screenshot-2025-12-31-15-35-13.png)
+![dddPy screenshot](assets/screenshot-2025-12-31-15-35-22.png)
+![dddPy screenshot](assets/screenshot-2025-12-31-15-35-24.png)
 
 ## Installation
 ### Ready-built binaries
