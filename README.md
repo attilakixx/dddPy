@@ -2,14 +2,13 @@
 DDD file reader written in Python for VU and driver tachograph files.
 
 ## Functions
-- Open `.ddd` and `.DDD` files with a Tkinter GUI (file picker + auto-open).
-- Detect file type (driver card vs vehicle unit) and show a Summary tab.
-- Validate VU parts and driver-card EF parts (valid/invalid/missing).
+- Open `.ddd` files with a Tkinter GUI
+- Detect file type (driver card vs vehicle unit)
+- Validate VU parts and driver-card parts (valid/invalid/missing).
 - Show key card identification/licence data for driver cards.
 - Display events, faults, overspeeding, and activity timelines (daily blocks + chart).
 - Render driver/co-driver activity headers (insert/withdraw info).
 - Show VU technical data (identification, sensor pairing, calibration).
-- Show country codes for all NationNumeric values.
 - Export the parsed view to HTML.
 
 ## Screenshots
@@ -43,14 +42,7 @@ These are built locally with PyInstaller. If you change the code, rebuild to get
 
 ## Roadmap
 1. Complete parsing coverage
-   - Decode remaining record types and fields per spec (VU + driver card).
-   - Match the PDF output for all tables.
+   - Decode remaining record types and fields per spec if there's any more...(VU + driver card).
 2. Add export formats
-   - JSON for raw structured data.
    - CSV summaries for common reports (activities, events, faults).
-3. Strengthen validation
-   - VU signature verification.
-   - Gen2 (ECC) certificate verification.
-4. Testing and validation
-   - Unit tests for low-level parsers and record decoding.
-   - Golden tests against the sample `.ddd` files.
+3. Testing and validation
