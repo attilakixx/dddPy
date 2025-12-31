@@ -1,7 +1,9 @@
 hidden/
+docs/
 tachoPartValidatorSample/
 __pycache__/
 *.py[cod]
 build/
 *.spec
 .venv-build/
+*.backup

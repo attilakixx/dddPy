@@ -13,7 +13,7 @@ DDD file reader written in Python for VU and driver tachograph files.
 - Export the parsed view to HTML.
 
 ## Screenshot
-![dddPy screenshot](<Screenshot from 2025-12-29 21-34-35.png>)
+![dddPy screenshot](assets/Screenshot from 2025-12-29 21-34-35.png)
 
 ## Installation
 ### Ready-built binaries
@@ -26,7 +26,7 @@ These are built locally with PyInstaller. If you change the code, rebuild to get
 1. Install Python 3.
 2. From the project folder:
    - Install deps: `python3 -m pip install -r requirements-build.txt`
-   - Run the app: `python3 app.py`
+   - Run the app: `python3 src/app.py`
 
 ### Build a standalone app
 - The build scripts bootstrap a local `.venv-build` and install build deps.

@@ -18,11 +18,11 @@ source "$VENV/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
 
-ICON="dddPyIcon.png"
-if [ -f "icon.png" ]; then
-  ICON="icon.png"
-elif [ -f "icon.ico" ]; then
-  ICON="icon.ico"
+ICON="assets/dddPyIcon.png"
+if [ -f "assets/icon.png" ]; then
+  ICON="assets/icon.png"
+elif [ -f "assets/icon.ico" ]; then
+  ICON="assets/icon.ico"
 fi
 
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name dddPy --icon "$ICON" app.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name dddPy --icon "$ICON" --add-data "assets:assets" src/app.py
