@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox, ttk
 import tkinter.font as tkfont
 from pathlib import Path
 from datetime import datetime, timezone
+import webbrowser
 
 from ddd_parser import DddHeader, parse_summary
 from export_html import build_html
@@ -104,6 +105,8 @@ class DddReaderApp(tk.Tk):
         default_font.configure(family=base_family, size=10)
         heading_font = tkfont.Font(family=base_family, size=10, weight="bold")
         title_font = tkfont.Font(family=base_family, size=16, weight="bold")
+        link_font = tkfont.Font(family=base_family, size=10, underline=True)
+        self._link_font = link_font
 
         self.configure(background=colors["bg"])
         style.configure("TFrame", background=colors["panel"])
@@ -115,6 +118,7 @@ class DddReaderApp(tk.Tk):
         style.configure("Valid.TLabel", background=colors["panel"], foreground=colors["success"])
         style.configure("Invalid.TLabel", background=colors["panel"], foreground=colors["danger"])
         style.configure("Neutral.TLabel", background=colors["panel"], foreground=colors["text"])
+        style.configure("Link.TLabel", background=colors["panel"], foreground="#0B63CE", font=link_font)
 
         style.configure(
             "Accent.TButton",
@@ -199,6 +203,12 @@ class DddReaderApp(tk.Tk):
         build_summary_tab(self, self.summary_tab)
         build_vehicle_unit_tab(self, self.vehicle_unit_tab)
         build_driver_card_tab(self, self.driver_card_tab)
+
+    def _open_url(self, url: str) -> None:
+        try:
+            webbrowser.open_new_tab(url)
+        except OSError as exc:
+            messagebox.showerror("Open link failed", str(exc))
 
     def _copy_selection(self, _event=None) -> None:
         widget = self.focus_get()

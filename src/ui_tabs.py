@@ -45,6 +45,17 @@ def build_summary_tab(app, parent: ttk.Frame) -> None:
             ttk.Label(header_frame, image=app.logo_image).grid(
                 row=0, column=1, sticky="e"
             )
+            link_label = ttk.Label(
+                header_frame,
+                text="github.com/attilakixx/dddPy",
+                style="Link.TLabel",
+                cursor="hand2",
+            )
+            link_label.grid(row=1, column=1, sticky="e", pady=(4, 0))
+            link_label.bind(
+                "<Button-1>",
+                lambda _event: app._open_url("https://github.com/attilakixx/dddPy"),
+            )
         except tk.TclError:
             app.logo_image = None
 
