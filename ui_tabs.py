@@ -713,6 +713,8 @@ def build_vehicle_unit_tab(app, parent: ttk.Frame) -> None:
     app.activity_canvas = tk.Canvas(chart_frame, height=280, bg="white")
     app.activity_canvas.grid(row=0, column=0, sticky="nsew")
     app.activity_canvas.bind("<Configure>", app._on_canvas_resize)
+    app.activity_canvas.bind("<Motion>", app._on_chart_motion)
+    app.activity_canvas.bind("<Leave>", app._on_chart_leave)
 
     chart_scrollbar = ttk.Scrollbar(
         chart_frame, orient="vertical", command=app.activity_canvas.yview

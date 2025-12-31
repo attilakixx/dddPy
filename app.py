@@ -69,6 +69,10 @@ class DddReaderApp(tk.Tk):
         self._activity_header_items_by_day = {}
         self._activity_item_day = {}
         self._current_chart_days = ()
+        self._chart_item_info = {}
+        self._chart_tooltip = None
+        self._chart_tooltip_label = None
+        self._chart_tooltip_text = None
 
         self._apply_theme()
         self._build_ui()
@@ -281,6 +285,8 @@ class DddReaderApp(tk.Tk):
             self._activity_header_items_by_day = {}
             self._activity_item_day = {}
             self._current_chart_days = ()
+            self._chart_item_info = {}
+            self._hide_chart_tooltip()
             self.overspeed_last_control_var.set("")
             self.overspeed_first_since_var.set("")
             self.overspeed_count_var.set("")
@@ -1084,9 +1090,65 @@ class DddReaderApp(tk.Tk):
         if self._current_chart_days:
             self._draw_activity_chart(self._current_chart_days)
 
+    def _on_chart_motion(self, event) -> None:
+        canvas = self.activity_canvas
+        current = canvas.find_withtag("current")
+        if not current:
+            self._hide_chart_tooltip()
+            return
+        item_id = current[0]
+        if "segment" not in canvas.gettags(item_id):
+            self._hide_chart_tooltip()
+            return
+        text = self._chart_item_info.get(item_id)
+        if not text:
+            self._hide_chart_tooltip()
+            return
+        if text != self._chart_tooltip_text:
+            self._show_chart_tooltip(event.x_root + 12, event.y_root + 12, text)
+        elif self._chart_tooltip is not None:
+            self._chart_tooltip.geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+
+    def _on_chart_leave(self, _event) -> None:
+        self._hide_chart_tooltip()
+
+    def _show_chart_tooltip(self, x_root: int, y_root: int, text: str) -> None:
+        if self._chart_tooltip is None or not self._chart_tooltip.winfo_exists():
+            tip = tk.Toplevel(self)
+            tip.wm_overrideredirect(True)
+            try:
+                tip.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            label = tk.Label(
+                tip,
+                text=text,
+                bg="#FFF8CC",
+                fg="#111111",
+                relief="solid",
+                borderwidth=1,
+                font=("TkDefaultFont", 9),
+            )
+            label.pack(ipadx=4, ipady=2)
+            self._chart_tooltip = tip
+            self._chart_tooltip_label = label
+        else:
+            self._chart_tooltip_label.configure(text=text)
+        self._chart_tooltip_text = text
+        self._chart_tooltip.geometry(f"+{x_root}+{y_root}")
+
+    def _hide_chart_tooltip(self) -> None:
+        if self._chart_tooltip and self._chart_tooltip.winfo_exists():
+            self._chart_tooltip.destroy()
+        self._chart_tooltip = None
+        self._chart_tooltip_label = None
+        self._chart_tooltip_text = None
+
     def _draw_activity_chart(self, days) -> None:
         canvas = self.activity_canvas
         canvas.delete("all")
+        self._chart_item_info = {}
+        self._hide_chart_tooltip()
         if not days:
             canvas.configure(scrollregion=(0, 0, 0, 0))
             return
@@ -1157,13 +1219,21 @@ class DddReaderApp(tk.Tk):
                 bar_height = self._activity_bar_height(
                     segment.activity, segment.card_status, row_height
                 )
-                canvas.create_rectangle(
+                item_id = canvas.create_rectangle(
                     x1,
                     row_y + (row_height - bar_height),
                     x2,
                     row_y + row_height,
                     fill=color,
                     outline="",
+                    tags=("segment",),
+                )
+                duration_seconds = max(0, int((segment.end_minute - segment.start_minute) * 60))
+                hours = duration_seconds // 3600
+                minutes = (duration_seconds % 3600) // 60
+                seconds = duration_seconds % 60
+                self._chart_item_info[item_id] = (
+                    f"Duration: {hours:02d}:{minutes:02d}:{seconds:02d}"
                 )
 
             canvas.create_text(
