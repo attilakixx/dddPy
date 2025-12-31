@@ -164,6 +164,21 @@ class CardSpecificCondition:
 
 
 @dataclass(frozen=True)
+class CardPlaceRecord:
+    time_raw: int | None
+    time_iso: str | None
+    entry_type: int
+    country: int
+    region: int
+    odometer: int | None
+    gps_time_raw: int | None
+    gps_time_iso: str | None
+    accuracy: int | None
+    latitude_raw: int | None
+    longitude_raw: int | None
+
+
+@dataclass(frozen=True)
 class CardVehicleRecord:
     first_use_raw: int | None
     first_use_iso: str | None
@@ -193,6 +208,7 @@ class DriverCardSummary:
     events: tuple[CardEventRecord, ...]
     faults: tuple[CardEventRecord, ...]
     vehicles_used: tuple[CardVehicleRecord, ...]
+    places: tuple[CardPlaceRecord, ...]
     specific_conditions: tuple[CardSpecificCondition, ...]
     vehicle_units: tuple[CardVehicleUnitRecord, ...]
 
@@ -662,6 +678,29 @@ def format_specific_condition_type(condition_type: int) -> str:
         4: "Ferry/Train Crossing End",
     }
     return labels.get(condition_type, f"Unknown ({condition_type})")
+
+
+def format_place_entry_type(entry_type: int) -> str:
+    labels = {
+        0: "Begin",
+        1: "End",
+    }
+    return labels.get(entry_type, f"Type {entry_type}")
+
+
+def format_gnss_accuracy(accuracy: int | None) -> str:
+    if accuracy is None:
+        return ""
+    return f"{accuracy / 10:.1f}"
+
+
+def format_gnss_coordinate(value: int | None) -> str:
+    if value is None:
+        return ""
+    degrees = value // 1000
+    minutes_tenths = value % 1000
+    decimal = degrees + (minutes_tenths / 10) / 60
+    return f"{decimal:.3f}"
 
 
 def format_driver_event_type(event_type: int) -> str:

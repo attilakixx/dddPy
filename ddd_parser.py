@@ -10,6 +10,7 @@ from ddd_structs import (
     CardApplicationIdentification,
     CardEventRecord,
     CardIdentification,
+    CardPlaceRecord,
     CardSpecificCondition,
     CardVehicleRecord,
     CardVehicleUnitRecord,
@@ -897,6 +898,16 @@ def _get_card_file_data(
     return None
 
 
+def _get_card_file_entry(
+    entries_by_id: dict, file_id: int, appendices: tuple[int, ...]
+) -> dict | None:
+    for appendix in appendices:
+        for entry in entries_by_id.get(file_id, []):
+            if entry["appendix"] == appendix:
+                return entry
+    return None
+
+
 def _verify_driver_card_certificates(
     ca_data: bytes, card_data: bytes
 ) -> tuple[bool, str | None]:
@@ -1199,8 +1210,13 @@ def _parse_driver_card_summary(
     segments = _parse_driver_card_segments(data)
     seg_ident = segments.get(0x120D, b"")
     seg_misc = segments.get(0x4420, b"")
+    entries, _trailing, _truncated = _parse_card_ef_files(data)
+    entries_by_id: dict[int, list[dict]] = {}
+    for entry in entries:
+        entries_by_id.setdefault(entry["file_id"], []).append(entry)
 
-    card_app = _parse_card_application_identification(data)
+    app_entry = _get_card_file_entry(entries_by_id, 0x0501, appendices=(2, 0))
+    card_app = _parse_card_application_identification(data, app_entry)
     driving_licence = _parse_driving_licence_information(data)
     card_ident = _parse_card_identification(data, card_app)
     events = _parse_driver_card_events(
@@ -1209,9 +1225,20 @@ def _parse_driver_card_summary(
     faults = _parse_driver_card_faults(
         seg_ident, card_app.faults_per_type if card_app else None
     )
-    vehicles_used = _parse_driver_card_vehicles_used(seg_misc)
+    vehicles_data = _get_card_file_data(entries_by_id, 0x0505, appendices=(2, 0))
+    vehicles_used = _parse_driver_card_vehicles_used(
+        vehicles_data, card_app.vehicle_records if card_app else None
+    )
+    places_entry = _get_card_file_entry(entries_by_id, 0x0506, appendices=(2, 0))
+    places = _parse_driver_card_places(
+        places_entry, card_app.place_records if card_app else None
+    )
     specific_conditions = _parse_driver_card_specific_conditions(seg_misc)
-    vehicle_units = _parse_driver_card_vehicle_units(seg_misc)
+    vehicle_units = _parse_driver_card_vehicle_units_from_gnss(
+        _get_card_file_entry(entries_by_id, 0x0523, appendices=(2, 0))
+    )
+    if not vehicle_units:
+        vehicle_units = _parse_driver_card_vehicle_units(seg_misc)
 
     return DriverCardSummary(
         application_identification=card_app,
@@ -1220,6 +1247,7 @@ def _parse_driver_card_summary(
         events=events,
         faults=faults,
         vehicles_used=vehicles_used,
+        places=places,
         specific_conditions=specific_conditions,
         vehicle_units=vehicle_units,
     )
@@ -1269,12 +1297,20 @@ def _find_driver_card_tag_record(
 
 def _parse_card_application_identification(
     data: bytes,
+    entry: dict | None = None,
 ) -> CardApplicationIdentification | None:
-    record = _find_driver_card_tag_record(data, 0x0501, min_length=10, max_length=12)
-    if record is None:
-        return None
-    start, length = record
-    payload = data[start:start + length]
+    if entry is None:
+        record = _find_driver_card_tag_record(data, 0x0501, min_length=10, max_length=17)
+        if record is None:
+            return None
+        start, length = record
+        payload = data[start:start + length]
+        appendix = None
+    else:
+        payload = entry.get("data") or b""
+        length = entry.get("length", len(payload))
+        appendix = entry.get("appendix")
+
     if len(payload) < 10:
         return None
     card_type = payload[0]
@@ -1289,6 +1325,11 @@ def _parse_card_application_identification(
         place_records = int.from_bytes(payload[9:11], "big")
     else:
         place_records = payload[9]
+    card_generation = None
+    if appendix == 2:
+        card_generation = 2
+    elif appendix == 0:
+        card_generation = 1
     return CardApplicationIdentification(
         card_type=card_type,
         card_structure_version=card_structure_version,
@@ -1297,7 +1338,7 @@ def _parse_card_application_identification(
         activity_structure_length=activity_length,
         vehicle_records=vehicle_records,
         place_records=place_records,
-        card_generation=None,
+        card_generation=card_generation,
     )
 
 
@@ -1361,7 +1402,7 @@ def _parse_card_identification(
         return None
 
     card_type = card_app.card_type if card_app else 1
-    card_generation = 0
+    card_generation = card_app.card_generation if card_app and card_app.card_generation else 0
     card_number_value = FullCardNumber(
         card_type=card_type,
         issuing_nation=issuing_nation,
@@ -1460,37 +1501,144 @@ def _parse_driver_card_faults(
     return tuple(records)
 
 
-def _parse_driver_card_vehicles_used(data: bytes) -> tuple[CardVehicleRecord, ...]:
-    if not data or len(data) < 60:
+def _parse_driver_card_vehicles_used(
+    data: bytes | None, vehicle_records: int | None
+) -> tuple[CardVehicleRecord, ...]:
+    if not data or len(data) < 33:
         return ()
+    payload_len = len(data) - 2
+    if payload_len <= 0:
+        return ()
+
+    record_len = None
+    for candidate in (48, 31):
+        if payload_len % candidate == 0:
+            record_len = candidate
+            break
+    if record_len is None:
+        if payload_len >= 48:
+            record_len = 48
+        elif payload_len >= 31:
+            record_len = 31
+        else:
+            return ()
+
+    has_vin = record_len == 48
+    record_count = payload_len // record_len
+    if vehicle_records:
+        record_count = min(record_count, vehicle_records)
+
     records: list[CardVehicleRecord] = []
-    record_len = 48
-    offset = 5
-    while offset + record_len <= len(data):
+    for idx in range(record_count):
+        offset = 2 + idx * record_len
         record = data[offset:offset + record_len]
-        vin = record[2:19].decode("latin-1", errors="replace").strip()
-        if vin and _looks_like_card_number(vin):
-            odo_begin = int.from_bytes(record[19:22], "big")
-            odo_end = int.from_bytes(record[22:25], "big")
-            first_use = int.from_bytes(record[25:29], "big")
-            last_use = int.from_bytes(record[29:33], "big")
-            registration_nation = record[33]
-            reg_reader = ByteReader(record[34:48])
-            registration_number = parse_vehicle_registration_number(reg_reader)
-            records.append(
-                CardVehicleRecord(
-                    first_use_raw=first_use if _looks_like_time_real(first_use) else None,
-                    first_use_iso=time_real_to_iso(first_use),
-                    last_use_raw=last_use if _looks_like_time_real(last_use) else None,
-                    last_use_iso=time_real_to_iso(last_use),
-                    odometer_begin=odo_begin,
-                    odometer_end=odo_end,
-                    registration_nation=registration_nation,
-                    registration_number=registration_number,
-                    vin=vin,
-                )
+        if len(record) < record_len:
+            break
+        odo_begin = int.from_bytes(record[0:3], "big")
+        odo_end = int.from_bytes(record[3:6], "big")
+        first_use = int.from_bytes(record[6:10], "big")
+        last_use = int.from_bytes(record[10:14], "big")
+        registration_nation = record[14]
+        reg_reader = ByteReader(record[15:29])
+        registration_number = parse_vehicle_registration_number(reg_reader)
+        vin = ""
+        if has_vin and len(record) >= 48:
+            vin = record[31:48].decode("latin-1", errors="replace").strip()
+        records.append(
+            CardVehicleRecord(
+                first_use_raw=first_use if _looks_like_time_real(first_use) else None,
+                first_use_iso=time_real_to_iso(first_use),
+                last_use_raw=last_use if _looks_like_time_real(last_use) else None,
+                last_use_iso=time_real_to_iso(last_use),
+                odometer_begin=odo_begin,
+                odometer_end=odo_end,
+                registration_nation=registration_nation,
+                registration_number=registration_number,
+                vin=vin,
             )
-        offset += record_len
+        )
+    return tuple(records)
+
+
+def _parse_driver_card_places(
+    entry: dict | None, place_records: int | None
+) -> tuple[CardPlaceRecord, ...]:
+    if entry is None:
+        return ()
+    data = entry.get("data") or b""
+    if not data:
+        return ()
+
+    appendix = entry.get("appendix")
+    header_len = 2 if appendix == 2 else 1
+    if len(data) <= header_len:
+        return ()
+
+    record_len = None
+    if place_records and (len(data) - header_len) % place_records == 0:
+        record_len = (len(data) - header_len) // place_records
+    if record_len not in (10, 21):
+        record_len = 21 if appendix == 2 else 10
+
+    record_count = (len(data) - header_len) // record_len
+    if place_records:
+        record_count = min(record_count, place_records)
+
+    records: list[CardPlaceRecord] = []
+    for idx in range(record_count):
+        offset = header_len + idx * record_len
+        record = data[offset:offset + record_len]
+        if len(record) < record_len:
+            break
+        if all(b == 0 for b in record):
+            continue
+
+        time_raw = int.from_bytes(record[0:4], "big")
+        entry_type = record[4]
+        country = record[5]
+        region = record[6]
+        odometer = int.from_bytes(record[7:10], "big")
+
+        gps_time_raw = None
+        accuracy = None
+        latitude_raw = None
+        longitude_raw = None
+        if record_len >= 21:
+            gps_time_raw = int.from_bytes(record[10:14], "big")
+            accuracy = record[14]
+            latitude_raw = _decode_signed_24(int.from_bytes(record[15:18], "big"))
+            longitude_raw = _decode_signed_24(int.from_bytes(record[18:21], "big"))
+
+        time_value = time_raw if _looks_like_time_real(time_raw) else None
+        gps_time_value = None
+        if gps_time_raw is not None and _looks_like_time_real(gps_time_raw):
+            gps_time_value = gps_time_raw
+
+        if (
+            time_value is None
+            and gps_time_value is None
+            and country == 0
+            and region == 0
+            and odometer == 0
+            and entry_type == 0
+        ):
+            continue
+
+        records.append(
+            CardPlaceRecord(
+                time_raw=time_value,
+                time_iso=time_real_to_iso(time_value) if time_value else None,
+                entry_type=entry_type,
+                country=country,
+                region=region,
+                odometer=odometer if odometer else None,
+                gps_time_raw=gps_time_value,
+                gps_time_iso=time_real_to_iso(gps_time_value) if gps_time_value else None,
+                accuracy=accuracy,
+                latitude_raw=latitude_raw,
+                longitude_raw=longitude_raw,
+            )
+        )
     return tuple(records)
 
 
@@ -1545,6 +1693,31 @@ def _parse_driver_card_vehicle_units(
             )
         )
     return tuple(records)
+
+
+def _parse_driver_card_vehicle_units_from_gnss(
+    entry: dict | None,
+) -> tuple[CardVehicleUnitRecord, ...]:
+    if entry is None:
+        return ()
+    data = entry.get("data") or b""
+    if len(data) < 12:
+        return ()
+    timestamp = int.from_bytes(data[2:6], "big")
+    manufacturer_code = data[6]
+    device_id = data[7]
+    software_version = data[8:12].decode("latin-1", errors="replace").strip()
+    if not _looks_like_time_real(timestamp):
+        return ()
+    return (
+        CardVehicleUnitRecord(
+            timestamp_raw=timestamp,
+            timestamp_iso=time_real_to_iso(timestamp),
+            manufacturer_code=manufacturer_code,
+            device_id=device_id,
+            software_version=software_version,
+        ),
+    )
 
 
 def _find_driver_card_record_block(
@@ -1646,6 +1819,12 @@ def _looks_like_licence_bytes(raw: bytes) -> bool:
 
 def _looks_like_time_real(value: int) -> bool:
     return 946684800 <= value <= 1893456000
+
+
+def _decode_signed_24(value: int) -> int:
+    if value & 0x800000:
+        return value - 0x1000000
+    return value
 
 
 def _looks_like_card_number(value: str) -> bool:

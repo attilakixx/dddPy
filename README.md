@@ -9,6 +9,7 @@ DDD file reader written in Python for VU and driver tachograph files.
 - Display events, faults, overspeeding, and activity timelines (daily blocks).
 - Render driver/co-driver activity headers (insert/withdraw info).
 - Show country codes for all NationNumeric values.
+- Export the parsed view to HTML.
 
 ## Screenshot
 ![dddPy screenshot](<Screenshot from 2025-12-29 21-34-35.png>)
