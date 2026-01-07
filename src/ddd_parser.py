@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from ddd_binary import ByteReader
 from ddd_structs import (
@@ -147,6 +148,14 @@ _EU_RSA_N = bytes(
 )
 _EU_RSA_E = bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01])
 
+try:
+    from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
+    from cryptography.hazmat.primitives import hashes
+except ImportError:  # pragma: no cover
+    ec = None
+    ec_utils = None
+    hashes = None
+
 _GEN2_OVERVIEW_SEQUENCE = (
     (0x04,),
     (0x0F,),
@@ -205,6 +214,53 @@ _GEN2_TREP_SEQUENCES = {
     0x35: _GEN2_TECH_SEQUENCE,
 }
 
+_GEN2_SIGNING_RECORD_TYPES = {
+    0x01,
+    0x02,
+    0x03,
+    0x05,
+    0x06,
+    0x07,
+    0x09,
+    0x0A,
+    0x0B,
+    0x0C,
+    0x0D,
+    0x0E,
+    0x10,
+    0x11,
+    0x12,
+    0x13,
+    0x14,
+    0x15,
+    0x16,
+    0x17,
+    0x18,
+    0x19,
+    0x1A,
+    0x1B,
+    0x1C,
+    0x1D,
+    0x1E,
+    0x1F,
+    0x20,
+    0x21,
+    0x22,
+    0x23,
+    0x24,
+}
+
+_GEN2_SKIP_RECORD_TYPES = {0x04, 0x08, 0x0F}
+
+_ECC_CURVE_INFO = {
+    "1.3.36.3.3.2.8.1.1.7.": ("brainpoolP256r1", "sha256"),
+    "1.3.36.3.3.2.8.1.1.11.": ("brainpoolP384r1", "sha384"),
+    "1.3.36.3.3.2.8.1.1.13.": ("brainpoolP512r1", "sha512"),
+    "1.2.840.10045.3.1.7.": ("secp256r1", "sha256"),
+    "1.3.132.0.34.": ("secp384r1", "sha384"),
+    "1.3.132.0.35.": ("secp521r1", "sha512"),
+}
+
 _GEN2_PART_LABELS = {
     "Overview": "Overview",
     "Activities": "Activities",
@@ -242,6 +298,13 @@ class DddPart:
     name: str
     status: str
     note: str | None
+
+
+@dataclass
+class VuValidationContext:
+    gen1_vu_key: tuple[bytes, bytes] | None = None
+    gen2_public_key: Any | None = None
+    gen2_hash: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -433,6 +496,7 @@ def _validate_parts(data: bytes, header: DddHeader) -> tuple[DddPart, ...]:
     }
 
     reader = ByteReader(data)
+    context = VuValidationContext()
     while reader.remaining() > 0:
         if reader.remaining() < 2:
             _append_note(stats, "Overview", "Trailing bytes after last part")
@@ -451,7 +515,7 @@ def _validate_parts(data: bytes, header: DddHeader) -> tuple[DddPart, ...]:
         trep = reader.read_u8()
         part_label = _TREP_DATA_TYPES.get(trep)
         try:
-            ok, note = _validate_vu_part(reader, trep)
+            ok, note = _validate_vu_part(reader, trep, context)
         except ValueError as exc:
             ok, note = False, f"Invalid structure ({exc})"
         if ok and reader.remaining() > 0 and reader.peek_bytes(1)[0] != TRANSFER_DATA_POSITIVE_RESPONSE_SID:
@@ -465,7 +529,9 @@ def _validate_parts(data: bytes, header: DddHeader) -> tuple[DddPart, ...]:
                     stats[part_name]["notes"].append(note)
             else:
                 stats[part_name]["invalid"] += 1
-                stats[part_name]["notes"].append(note or "Invalid structure")
+                note_text = note or "Invalid structure"
+                if note_text not in stats[part_name]["notes"]:
+                    stats[part_name]["notes"].append(note_text)
         if not ok and not _resync_to_next_part(reader):
             break
 
@@ -554,7 +620,7 @@ def _get_gen2_sequence(trep: int, generation: str | None) -> tuple[tuple[int, ..
         return None
     if generation == "gen2_v2" and trep in {0x31}:
         sequence = list(sequence)
-        sequence[3] = (0x0B, 0x12)
+        sequence[3] = (0x0B, 0x24)
         return tuple(sequence)
     return sequence
 
@@ -572,7 +638,9 @@ def _read_gen2_record(reader: ByteReader) -> tuple[int, int, int, bool]:
     return record_type, record_size, record_count, True
 
 
-def _validate_vu_part(reader: ByteReader, trep: int) -> tuple[bool, str | None]:
+def _validate_vu_part(
+    reader: ByteReader, trep: int, context: VuValidationContext
+) -> tuple[bool, str | None]:
     if trep == 0x00:
         if reader.remaining() < 2:
             return False, "Download interface version truncated"
@@ -581,13 +649,16 @@ def _validate_vu_part(reader: ByteReader, trep: int) -> tuple[bool, str | None]:
 
     generation = _detect_trep_generation(trep)
     if generation == "gen1":
-        return _validate_gen1_part(reader, trep)
+        return _validate_gen1_part(reader, trep, context)
     if generation in {"gen2_v1", "gen2_v2", "gen2_v1_or_v2"}:
-        return _validate_gen2_part(reader, trep, generation)
+        return _validate_gen2_part(reader, trep, generation, context)
     return False, f"Unknown TREP 0x{trep:02X}"
 
 
-def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None]:
+def _validate_gen1_part(
+    reader: ByteReader, trep: int, context: VuValidationContext
+) -> tuple[bool, str | None]:
+    payload_start = reader.tell()
     try:
         if trep == 0x01:
             if not _skip_exact(reader, 194) or not _skip_exact(reader, 194):
@@ -606,7 +677,12 @@ def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None
                 return False, "Overview controls truncated"
             if not _skip_exact(reader, 128):
                 return False, "Overview signature truncated"
-            return True, "Structure OK (signature not verified)"
+            payload_end = reader.tell()
+            return _verify_gen1_signature(
+                reader.data[payload_start:payload_end],
+                trep,
+                context,
+            )
         if trep == 0x02:
             if not _skip_exact(reader, 7):
                 return False, "Activities header truncated"
@@ -632,7 +708,12 @@ def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None
                 return False, "Activities condition records truncated"
             if not _skip_exact(reader, 128):
                 return False, "Activities signature truncated"
-            return True, "Structure OK (signature not verified)"
+            payload_end = reader.tell()
+            return _verify_gen1_signature(
+                reader.data[payload_start:payload_end],
+                trep,
+                context,
+            )
         if trep == 0x03:
             if reader.remaining() < 1:
                 return False, "Events faults count missing"
@@ -658,7 +739,12 @@ def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None
                 return False, "Time adjustment records truncated"
             if not _skip_exact(reader, 128):
                 return False, "Events signature truncated"
-            return True, "Structure OK (signature not verified)"
+            payload_end = reader.tell()
+            return _verify_gen1_signature(
+                reader.data[payload_start:payload_end],
+                trep,
+                context,
+            )
         if trep == 0x04:
             if reader.remaining() < 2:
                 return False, "Speed block count missing"
@@ -667,7 +753,12 @@ def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None
                 return False, "Speed blocks truncated"
             if not _skip_exact(reader, 128):
                 return False, "Speed signature truncated"
-            return True, "Structure OK (signature not verified)"
+            payload_end = reader.tell()
+            return _verify_gen1_signature(
+                reader.data[payload_start:payload_end],
+                trep,
+                context,
+            )
         if trep == 0x05:
             if not _skip_exact(reader, 88):
                 return False, "Technical data header truncated"
@@ -686,15 +777,24 @@ def _validate_gen1_part(reader: ByteReader, trep: int) -> tuple[bool, str | None
                 return False, "Calibration records truncated"
             if not _skip_exact(reader, 128):
                 return False, "Technical data signature truncated"
-            return True, "Structure OK (signature not verified)"
+            payload_end = reader.tell()
+            return _verify_gen1_signature(
+                reader.data[payload_start:payload_end],
+                trep,
+                context,
+            )
         return False, f"Unsupported Gen1 TREP 0x{trep:02X}"
     except ValueError:
         return False, "Truncated Gen1 part"
 
 
 def _validate_gen2_part(
-    reader: ByteReader, trep: int, generation: str | None
+    reader: ByteReader,
+    trep: int,
+    generation: str | None,
+    context: VuValidationContext,
 ) -> tuple[bool, str | None]:
+    payload_start = reader.tell()
     sequence = _get_gen2_sequence(trep, generation)
     if sequence is None:
         return False, f"Unsupported Gen2 TREP 0x{trep:02X}"
@@ -718,7 +818,12 @@ def _validate_gen2_part(
                 break
         if not signature_seen:
             return False, "Missing signature record"
-        return True, "Structure OK (signature not verified)"
+        payload_end = reader.tell()
+        return _verify_gen2_signature(
+            reader.data[payload_start:payload_end],
+            trep,
+            context,
+        )
 
     for allowed in sequence:
         record_type, _size, _count, ok = _read_gen2_record(reader)
@@ -727,7 +832,12 @@ def _validate_gen2_part(
         if record_type not in allowed:
             return False, f"Unexpected record 0x{record_type:02X}"
 
-    return True, "Structure OK (signature not verified)"
+    payload_end = reader.tell()
+    return _verify_gen2_signature(
+        reader.data[payload_start:payload_end],
+        trep,
+        context,
+    )
 
 
 def _skip_exact(reader: ByteReader, count: int) -> bool:
@@ -737,6 +847,304 @@ def _skip_exact(reader: ByteReader, count: int) -> bool:
         return False
     reader.skip(count)
     return True
+
+
+def _verify_gen1_signature(
+    payload: bytes, trep: int, context: VuValidationContext
+) -> tuple[bool, str | None]:
+    if len(payload) < 128:
+        return False, "Signature truncated"
+    signature = payload[-128:]
+
+    if trep == 0x01 and context.gen1_vu_key is None:
+        vu_key, note = _extract_gen1_vu_key(payload)
+        if vu_key is None:
+            return False, note
+        context.gen1_vu_key = vu_key
+
+    if context.gen1_vu_key is None:
+        return False, "Missing VU certificate"
+
+    if trep == 0x01:
+        if len(payload) < 388 + 128:
+            return False, "Overview signature truncated"
+        data_for_signing = payload[388:-128]
+    else:
+        data_for_signing = payload[:-128]
+
+    ok = _verify_gen1_block_signature(data_for_signing, signature, context.gen1_vu_key)
+    return (True, "Signature OK") if ok else (False, "Signature verification failed")
+
+
+def _extract_gen1_vu_key(payload: bytes) -> tuple[tuple[bytes, bytes] | None, str | None]:
+    if len(payload) < 388:
+        return None, "Overview certificates truncated"
+    member_sig = payload[:128]
+    member_cndash = payload[128:186]
+    vu_sig = payload[194:322]
+    vu_cndash = payload[322:380]
+
+    member_key = _verify_gen1_certificate(member_sig, member_cndash, _EU_RSA_N, _EU_RSA_E)
+    if member_key is None:
+        return None, "Member state certificate invalid"
+    vu_key = _verify_gen1_certificate(vu_sig, vu_cndash, member_key[0], member_key[1])
+    if vu_key is None:
+        return None, "VU certificate invalid"
+    return vu_key, None
+
+
+def _verify_gen1_certificate(
+    signature: bytes, cndash: bytes, key_n: bytes, key_e: bytes
+) -> tuple[bytes, bytes] | None:
+    srdash = _rsa_decode(signature, key_n, key_e)
+    if len(srdash) != 128 or srdash[0] != 0x6A or srdash[127] != 0xBC:
+        return None
+    cdash = srdash[1:107] + cndash
+    calc = hashlib.sha1(cdash).digest()
+    if calc != srdash[107:127]:
+        return None
+    return cdash[28:156], cdash[156:164]
+
+
+def _verify_gen1_block_signature(
+    data_for_signing: bytes, signature: bytes, vu_key: tuple[bytes, bytes]
+) -> bool:
+    key_n, key_e = vu_key
+    srdash = _rsa_decode(signature, key_n, key_e)
+    if len(srdash) < 127:
+        return False
+    hdash = srdash[107:127]
+    calc = hashlib.sha1(data_for_signing).digest()
+    if calc != hdash:
+        return False
+    for index in range(1, 91):
+        if srdash[index] != 0xFF:
+            return False
+    der = bytes(
+        [
+            0x30,
+            0x21,
+            0x30,
+            0x09,
+            0x06,
+            0x05,
+            0x2B,
+            0x0E,
+            0x03,
+            0x02,
+            0x1A,
+            0x05,
+            0x00,
+            0x04,
+            0x14,
+        ]
+    )
+    for index, expected in enumerate(der):
+        if srdash[92 + index] != expected:
+            return False
+    return True
+
+
+def _verify_gen2_signature(
+    payload: bytes, trep: int, context: VuValidationContext
+) -> tuple[bool, str | None]:
+    records = _parse_gen2_records(payload)
+    if not records:
+        return False, "Missing records"
+
+    signature = None
+    unknown_types: list[int] = []
+    data_for_signing: list[bytes] = []
+    for record in records:
+        record_type = record["type"]
+        if record_type == 0x08:
+            signature = record["data"]
+            continue
+        if record_type in _GEN2_SIGNING_RECORD_TYPES:
+            data_for_signing.append(record["header"] + record["data"])
+        elif record_type not in _GEN2_SKIP_RECORD_TYPES:
+            unknown_types.append(record_type)
+
+    if signature is None:
+        return False, "Missing signature record"
+    if unknown_types:
+        formatted = ", ".join(f"0x{val:02X}" for val in sorted(set(unknown_types)))
+        return False, f"Unknown record types: {formatted}"
+
+    if trep in {0x21, 0x31} and context.gen2_public_key is None:
+        public_key, hash_alg, note = _extract_gen2_ecc_key(payload)
+        if public_key is None:
+            return False, note
+        context.gen2_public_key = public_key
+        context.gen2_hash = hash_alg
+
+    if context.gen2_public_key is None or context.gen2_hash is None:
+        return False, "Missing overview public key"
+    if ec is None or ec_utils is None or hashes is None:
+        return False, "Signature verification unavailable (cryptography missing)"
+
+    if not signature or len(signature) % 2:
+        return False, "Invalid signature length"
+
+    data = b"".join(data_for_signing)
+    half = len(signature) // 2
+    r = int.from_bytes(signature[:half], "big")
+    s = int.from_bytes(signature[half:], "big")
+    der_sig = ec_utils.encode_dss_signature(r, s)
+    try:
+        context.gen2_public_key.verify(
+            der_sig, data, ec.ECDSA(context.gen2_hash)
+        )
+    except Exception:
+        return False, "Signature verification failed"
+    return True, "Signature OK"
+
+
+def _parse_gen2_records(payload: bytes) -> list[dict]:
+    records: list[dict] = []
+    offset = 0
+    while offset + 5 <= len(payload):
+        record_type = payload[offset]
+        record_size = int.from_bytes(payload[offset + 1:offset + 3], "big")
+        record_count = int.from_bytes(payload[offset + 3:offset + 5], "big")
+        total = record_size * record_count
+        end = offset + 5 + total
+        if end > len(payload):
+            return []
+        header = payload[offset:offset + 5]
+        data = payload[offset + 5:end]
+        records.append(
+            {
+                "type": record_type,
+                "header": header,
+                "data": data,
+            }
+        )
+        offset = end
+    if offset != len(payload):
+        return []
+    return records
+
+
+def _extract_gen2_ecc_key(
+    payload: bytes,
+) -> tuple[Any | None, Any | None, str | None]:
+    if ec is None or hashes is None:
+        return None, None, "Signature verification unavailable (cryptography missing)"
+
+    records = _parse_gen2_records(payload)
+    vu_cert = None
+    for record in records:
+        if record["type"] == 0x0F:
+            vu_cert = record["data"]
+            break
+    if vu_cert is None:
+        return None, None, "VU certificate missing"
+
+    try:
+        domain_params, public_key_bytes = _decode_vu_certificate(vu_cert)
+    except ValueError as exc:
+        return None, None, f"VU certificate parse error ({exc})"
+
+    oid = _decode_oid(domain_params)
+    curve_info = _ECC_CURVE_INFO.get(oid)
+    if curve_info is None:
+        return None, None, f"Unsupported ECC curve ({oid})"
+
+    curve_name, hash_name = curve_info
+    curve = _ecc_curve_from_name(curve_name)
+    hash_alg = _hash_from_name(hash_name)
+    if curve is None or hash_alg is None:
+        return None, None, f"Unsupported ECC curve ({oid})"
+
+    try:
+        public_key = ec.EllipticCurvePublicKey.from_encoded_point(
+            curve, public_key_bytes
+        )
+    except Exception as exc:
+        return None, None, f"Invalid ECC public key ({exc})"
+
+    return public_key, hash_alg, None
+
+
+def _decode_vu_certificate(cert_data: bytes) -> tuple[bytes, bytes]:
+    pos = _find_tag(cert_data, b"\x7F\x49", 0)
+    pos = _find_tag(cert_data, b"\x06", pos)
+    pos += 1
+    if pos >= len(cert_data):
+        raise ValueError("Missing domain parameters length")
+    domain_length = cert_data[pos]
+    pos += 1
+    if pos + domain_length > len(cert_data):
+        raise ValueError("Domain parameters truncated")
+    domain_params = cert_data[pos:pos + domain_length]
+    pos += domain_length
+
+    pos = _find_tag(cert_data, b"\x86", pos)
+    pos += 1
+    if pos >= len(cert_data):
+        raise ValueError("Missing public key length")
+    key_length = cert_data[pos]
+    pos += 1
+    if pos + key_length > len(cert_data):
+        raise ValueError("Public key truncated")
+    public_key = cert_data[pos:pos + key_length]
+    return domain_params, public_key
+
+
+def _find_tag(data: bytes, tag: bytes, start: int) -> int:
+    idx = data.find(tag, start)
+    if idx == -1:
+        raise ValueError("Missing certificate tag")
+    return idx
+
+
+def _decode_oid(domain_params: bytes) -> str:
+    if not domain_params:
+        raise ValueError("Empty domain parameters")
+    nodes = [
+        domain_params[0] // 40,
+        domain_params[0] % 40,
+    ]
+    index = 1
+    while index < len(domain_params):
+        value = domain_params[index]
+        if value & 0x80:
+            tmp = (value & 0x7F) >> 1
+            index += 1
+            if index >= len(domain_params):
+                break
+            tmp = (tmp << 8) | (domain_params[index] & 0x7F)
+            nodes.append(tmp)
+        else:
+            nodes.append(value)
+        index += 1
+    return ".".join(str(node) for node in nodes) + "."
+
+
+def _ecc_curve_from_name(name: str):
+    if ec is None:
+        return None
+    mapping = {
+        "brainpoolP256r1": ec.BrainpoolP256R1(),
+        "brainpoolP384r1": ec.BrainpoolP384R1(),
+        "brainpoolP512r1": ec.BrainpoolP512R1(),
+        "secp256r1": ec.SECP256R1(),
+        "secp384r1": ec.SECP384R1(),
+        "secp521r1": ec.SECP521R1(),
+    }
+    return mapping.get(name)
+
+
+def _hash_from_name(name: str):
+    if hashes is None:
+        return None
+    mapping = {
+        "sha256": hashes.SHA256(),
+        "sha384": hashes.SHA384(),
+        "sha512": hashes.SHA512(),
+    }
+    return mapping.get(name)
 
 
 def _validate_driver_card_parts(data: bytes) -> tuple[DddPart, ...]:

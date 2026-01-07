@@ -29,8 +29,19 @@ def build_summary_tab(app, parent: ttk.Frame) -> None:
         header_left, textvariable=app.validity_text, style="Neutral.TLabel"
     )
     app.validity_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+    ttk.Checkbutton(
+        header_left,
+        text="Strict validation (full VU + signatures)",
+        variable=app.strict_validation_var,
+        command=app._on_strict_validation_toggled,
+    ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+    ttk.Label(
+        header_left,
+        text="If enabled: VU files must contain all main parts and valid signatures; partial downloads show Invalid.",
+        style="Subtle.TLabel",
+    ).grid(row=3, column=0, sticky="w", pady=(0, 2))
     ttk.Label(header_left, textvariable=app.file_type_text, style="Subtle.TLabel").grid(
-        row=2, column=0, sticky="w", pady=(2, 0)
+        row=4, column=0, sticky="w", pady=(2, 0)
     )
 
     app.logo_image = None

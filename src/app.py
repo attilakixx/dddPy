@@ -74,6 +74,8 @@ class DddReaderApp(tk.Tk):
         self._chart_tooltip = None
         self._chart_tooltip_label = None
         self._chart_tooltip_text = None
+        self.strict_validation_var = tk.BooleanVar(value=True)
+        self.strict_validation = True
 
         self._apply_theme()
         self._build_ui()
@@ -209,6 +211,19 @@ class DddReaderApp(tk.Tk):
             webbrowser.open_new_tab(url)
         except OSError as exc:
             messagebox.showerror("Open link failed", str(exc))
+
+    def _on_strict_validation_toggled(self) -> None:
+        self.strict_validation = bool(self.strict_validation_var.get())
+        self._refresh_validity_display()
+
+    def _refresh_validity_display(self) -> None:
+        if not self.current_summary:
+            return
+        validity_text, validity_style = self._format_validity(
+            self.current_summary.header, self.current_summary.parts
+        )
+        self.validity_text.set(validity_text)
+        self.validity_label.configure(style=validity_style)
 
     def _copy_selection(self, _event=None) -> None:
         widget = self.focus_get()

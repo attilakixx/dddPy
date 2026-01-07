@@ -1,1 +1,2 @@
 pyinstaller==6.11.1
+cryptography==43.0.3
